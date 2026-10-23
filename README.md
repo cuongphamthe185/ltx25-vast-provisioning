@@ -16,6 +16,9 @@ It sets up ComfyUI for LTX-2.5 video-to-video with IC-LoRAs (Layout-to-Render, U
 
 Custom nodes: ComfyUI-LTXVideo, ComfyUI-KJNodes, ComfyUI-VideoHelperSuite
 (+ comfyui_controlnet_aux and ComfyUI-Video-Depth-Anything when `DONUT_UNION=1`).
+Each node is pinned to a commit in the script; update the hash there to move to a newer version.
+Their `requirements.txt` are installed with the image's torch/torchvision/torchaudio versions as constraints,
+so the CUDA 13.2 build of torch is never replaced.
 
 It also downloads the official `LTX-2.5_ICLoRA_Layout_To_Render_Two_Stage_Distilled.json` workflow and
 rewrites the model names to the int8 files above (`LTX-2.5_ICLoRA_Layout_To_Render_int8.json`).
@@ -29,11 +32,17 @@ rewrites the model names to the int8 files above (`LTX-2.5_ICLoRA_Layout_To_Rend
    `PROVISIONING_SCRIPT=<raw URL of provision_donut.sh>`.
 4. Rent an instance. ComfyUI stays on "Loading" until provisioning ends.
    Progress: Instance Portal → Instance Logs (`ok <file>` / `FAIL <file>` lines),
-   or `/workspace/donut_provision.log`; done when `/workspace/.donut_ready` exists.
+   or `/workspace/donut_provision.log`. Short step-by-step status: `/workspace/donut_status.txt`
+   (last line `READY` or `FAILED: …`). `/workspace/.donut_ready` is created only when every download,
+   node install and workflow check succeeded.
 
 ## Known issues / notes
 
 - Vast runs a given `PROVISIONING_SCRIPT` URL only once per instance (the URL is hashed); a reboot does not re-run it.
+  After changing the script, point the template at a new URL (e.g. the raw URL of the new commit).
+- The script only uses `/workspace/ComfyUI` (the copy ComfyUI runs from) and stops with `FAILED` if it does not
+  appear within 10 minutes, instead of installing into another ComfyUI copy that the running server never sees.
+- The Union Control IC-LoRA is an LTX-2.3 LoRA; its compatibility with the LTX-2.5 model is not verified yet.
 - In the "Jupyter" launch mode Jupyter is not proxied by the Instance Portal; use SSH (`-L 8080:localhost:8080`) instead.
 - Some RTX 5090 hosts fail to attach the GPU (`unresolvable CDI devices`); destroy and pick another host.
 - Do not use a bare `wait` after `exec > >(tee ...)`: bash ≥ 5.1 also waits on the process substitution and hangs.
