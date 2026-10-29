@@ -1,0 +1,11 @@
+# Local research notes, kept out of the repo
+docs/
+
+# AI agent instruction files
+AGENTS.md
+CLAUDE.md
+claude.md
+CLAUDE.local.md
+
+# Claude Code local settings
+.claude/settings.local.json
