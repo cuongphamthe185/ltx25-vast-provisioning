@@ -90,6 +90,30 @@ LORAS=${DONUT_LORAS:-motion-track}
 LORAS=${LORAS//,/ }
 
 FAILS=0
+
+# ---- network check: time one real ~0.7 GB file before the parallel downloads start ----
+# Same file for every model set so results compare across hosts; "SLOW NETWORK" in the status file
+# means this host will take far too long (the 9 GB image pull before this script is not measured).
+MIN_MBPS=${DONUT_MIN_MBPS:-50}   # MB/s; at 50 MB/s a ~45 GB model set takes ~15 min
+SPEED_FILE=moge_2_vitl_normal_fp16.safetensors
+if [ -s "$M/geometry_estimation/$SPEED_FILE" ]; then
+  status "network check skipped ($SPEED_FILE already present)"
+else
+  T0=$(date +%s.%N)
+  if get Comfy-Org/MoGe geometry_estimation/$SPEED_FILE $M/geometry_estimation; then
+    MBPS=$(awk -v b="$(stat -c %s "$M/geometry_estimation/$SPEED_FILE")" -v t0="$T0" -v t1="$(date +%s.%N)" \
+      'BEGIN { printf "%d", b / 1e6 / (t1 - t0) }')
+    if [ "$MBPS" -lt "$MIN_MBPS" ]; then
+      status "SLOW NETWORK: $MBPS MB/s (want >= $MIN_MBPS MB/s)"
+    else
+      status "network $MBPS MB/s"
+    fi
+  else
+    status "network check download failed"; FAILS=$((FAILS+1))
+  fi
+fi
+
+DL0=$(date +%s)
 PIDS=()
 case "$DONUT_MODEL" in
 ltx25)  # ~42 GB, gated
@@ -107,7 +131,6 @@ ltx23)  # ~42 GB; files of ComfyUI's LTX-2.3 IC-LoRA Union Control template + sp
   get Comfy-Org/ltx-2 split_files/text_encoders/gemma_3_12B_it_fp4_mixed.safetensors $M/text_encoders & PIDS+=($!)
   get Comfy-Org/ltx-2 split_files/loras/gemma-3-12b-it-abliterated_lora_rank64_bf16.safetensors $M/loras & PIDS+=($!)
   get Lightricks/LTX-2.3-22b-IC-LoRA-Union-Control ltx-2.3-22b-ic-lora-union-control-ref0.5.safetensors $M/loras & PIDS+=($!)
-  get Comfy-Org/MoGe geometry_estimation/moge_2_vitl_normal_fp16.safetensors $M/geometry_estimation & PIDS+=($!)
   get Lightricks/LTX-2.3 ltx-2.3-spatial-upscaler-x2-1.1.safetensors $M/latent_upscale_models & PIDS+=($!)
   for k in $LORAS; do
     [ "$k" = none ] && continue
@@ -133,7 +156,19 @@ h3)  # ~44 GB (+23 GB with DONUT_H3_R2V=1); files of ComfyUI's MiniMax H3 templa
   ;;
 esac
 
+# a progress line every 60 s while the models download, so a slow host shows up early in the log
+on_disk() { du -sB1 /workspace/.hf_tmp $M 2>/dev/null | awk '{ s += $1 } END { print s + 0 }'; }  # allocated bytes, not apparent size
+( prev=$(on_disk)
+  while sleep 60; do
+    cur=$(on_disk)
+    awk -v c="$cur" -v p="$prev" 'BEGIN { printf "progress %.1f GB in models, %d MB/s\n", c / 1e9, (c - p) / 1e6 / 60 }'
+    prev=$cur
+  done ) &
+MON=$!
+
 # ---- custom nodes (while models download), pinned to known commits ----
+# skip Git LFS files (example images/videos): their download can fail and abort the checkout
+export GIT_LFS_SKIP_SMUDGE=1
 cd $COMFY/custom_nodes
 add_node() { # git_url commit
   local d; d=$(basename "$1" .git)
@@ -180,6 +215,8 @@ status "waiting for model downloads"
 for p in "${PIDS[@]}"; do   # only the downloads; a bare wait would also wait on the tee log process and hang
   wait "$p" || FAILS=$((FAILS+1))
 done
+kill $MON 2>/dev/null
+status "downloads finished in $(( ($(date +%s) - DL0) / 60 )) min"
 rm -rf /workspace/.hf_tmp
 ls -la $M/diffusion_models $M/checkpoints $M/text_encoders $M/vae $M/latent_upscale_models $M/loras $M/geometry_estimation
 df -h /workspace | tail -1

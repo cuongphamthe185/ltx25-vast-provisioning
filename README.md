@@ -108,6 +108,12 @@ so the image's CUDA build of torch is never replaced.
    or `/workspace/donut_provision.log`. Short step-by-step status: `/workspace/donut_status.txt`
    (first line shows the model set and GPU, last line `READY` or `FAILED: …`). `/workspace/.donut_ready` is created
    only when every download, node install and workflow check succeeded.
+4. Check the network line early: before the big downloads the script times one ~0.7 GB file and writes
+   `network N MB/s`, or `SLOW NETWORK: N MB/s` when below `DONUT_MIN_MBPS` (default 50 MB/s, ~15 min for a
+   ~45 GB set). On a slow host, destroy the instance and rent another. While downloading, the log gets a
+   `progress … GB in models, N MB/s` line every minute, and the status file ends with the total download time.
+   The Docker image pull before the script starts is not measured, so filter hosts by network speed when renting
+   (≥ 2 Gbps advertised; a host advertising 812 Mbps delivered ~100 Mbps in a test).
 
 ## Choosing the image
 
@@ -144,3 +150,5 @@ written permission, and products must show "MiniMax H3" in their UI. Read the fu
 - Do not use a bare `wait` after `exec > >(tee ...)`: bash ≥ 5.1 also waits on the process substitution and hangs.
   The script waits only on the download PIDs.
 - Token hygiene: use a read-only HF token and revoke it after testing; env vars are visible on the rented host.
+- Custom nodes are fetched with `GIT_LFS_SKIP_SMUDGE=1`: ComfyUI-LTXVideo keeps example images in Git LFS, and a
+  failed LFS download aborted its checkout on a test host.
