@@ -45,16 +45,30 @@ Use the workflows from ComfyUI's Template Library (Video → LTX-2.3). Their sam
 not installed: load your own file into each Load Image / Load Video node before running.
 The script also saves 10-second copies of the T2V, I2V and FLF2V templates to the workflow list
 (`LTX-2.3_T2V_10s`, `LTX-2.3_I2V_10s`, `LTX-2.3_FLF2V_10s`); they are the bundled graphs with Duration set to 10
-(251 frames at 25 fps). Any template's length can also be changed in its Duration field.
-The ID-LoRA, Ingredients and Style Transition templates need extra LoRAs (`ingredients` key below for Ingredients).
+(the model renders 249 frames at 25 fps). Any template's length can also be changed in its Duration field.
+The ID-LoRA, Ingredients and Style Transition templates need extra LoRAs: add the `id-lora`, `ingredients` and
+`transition` keys below.
 
-#### Video-to-video LoRAs (`DONUT_LORAS`)
+#### LoRAs (`DONUT_LORAS`)
 
 Comma-separated keys, `all` or `none`; default `motion-track`. Only used with `DONUT_MODEL=ltx23`.
-Gated LoRAs need `HF_TOKEN` from an account that accepted the license on each repo page; without it they show up
-as `FAIL` lines and the run ends `FAILED`. All go to `models/loras`; bundled workflows go to the workflow list.
-Most IC-LoRAs are wired with the IC-LoRA video-to-video workflows of ComfyUI-LTXVideo
-(`LTXICLoRALoaderModelOnly` + `LTXAddVideoICLoRAGuide`); see each model card for inputs and strength.
+Files go to `models/loras`; bundled workflows go to the workflow list.
+- Gated keys need `HF_TOKEN` from an account that accepted the license on each repo page.
+- Civitai keys need `CIVITAI_TOKEN` (civitai.com → Account settings → API keys), set in the Vast account env like
+  `HF_TOKEN`. Never put it in this repo or in the template.
+
+Without the needed token those keys show up as `FAIL` lines and the run ends `FAILED`.
+
+How to use them:
+- IC-LoRAs (video-to-video, reference, camera): load them in the IC-LoRA template (Video → LTX 2.3 IC-LoRA Union
+  Control) in place of the Union Control LoRA and give them the guide video or references their model card asks
+  for, or use the IC-LoRA workflows of ComfyUI-LTXVideo (`LTXICLoRALoaderModelOnly` + `LTXAddVideoICLoRAGuide`).
+- Look and motion LoRAs: add a `LoraLoaderModelOnly` after the checkpoint in the T2V / I2V / FLF2V templates
+  (start around 0.7, range 0.4–1.0) and put the trigger word in the prompt when the card names one. They stack;
+  keep the total strength modest.
+- The community workflows on the model pages are not installed: most need extra node packs and other model files.
+
+Video-to-video (Lightricks and community):
 
 | Key | What it does (input → output) | Size | Gated |
 |---|---|---|---|
@@ -75,8 +89,52 @@ Most IC-LoRAs are wired with the IC-LoRA video-to-video workflows of ComfyUI-LTX
 | `foley` | Silent video → same video with sound effects (+ bundled workflow) | 0.23 GB | Yes |
 | `water-simulation`, `instant-shave`, `cross-eyed` | Effect IC-LoRAs (water, removes facial hair, cross-eyed) | 0.3–0.9 GB each | Yes |
 
-`all` downloads every key above (~18 GB) and needs `HF_TOKEN`. Union Control (depth/pose/canny/normal guided
-video-to-video) is always installed with `ltx23`.
+Reference, camera and motion ("Output use" = whether generated videos may be used commercially, from the model
+license or the Civitai permissions; the LTX-2 Community License of the base model applies on top):
+
+| Key | What it does | Size | Source | Output use |
+|---|---|---|---|---|
+| `msr` | Up to 4 subject images (characters, vehicles, props) + 1 background image → video keeping all of them. Installs ComfyUI-Licon-MSR, whose `Licon MSR` node turns the images into the reference video | 0.65 GB | LiconStudio (HF) | Yes (Apache-2.0) |
+| `id-lora` | Face image + voice sample + prompt → talking video that keeps the identity and the voice (ComfyUI ID-LoRA template) | 1.2 GB | Comfy-Org mirror (HF) | Check (ID-LoRA license "other") |
+| `3dreal` | Simple 3D render, for example a Blender animatic → photoreal cinematic video with the same layout and motion. Trigger `3DREAL` | 0.33 GB | fal (HF) | Unclear (license "other") |
+| `cameraman` | Reference video (any clip or a Blender camera move) + prompt or start image → new video with the same camera motion | 0.65 GB | Cseti (HF) | Yes (Civitai permissions) |
+| `transition` | Stylized transitions between a first and a last frame (ComfyUI Style Transition template); also steadies T2V / I2V motion | 0.39 GB | joyfox, ex valiantcat (HF) | Yes (Apache-2.0) |
+| `human-motion` | Smoother, more natural body movement for walking, dancing, fighting (strength 0.4–0.8) | 0.67 GB | vpakarinen (HF) | Yes (Apache-2.0) |
+| `hardcut` | Clean cinematic hard cuts between shots inside one generated clip (strength 0.2–1.0) | 0.66 GB | Civitai | Yes |
+| `camera-controls` | Makes "the camera pans left / tilts up / zooms in on …" prompts reliable | 0.33 GB | Civitai | No (non-commercial) |
+| `swordplay` | Sword fighting moves (slashes, spins, lunges). Trigger `swordplay` | 0.39 GB | Civitai | No |
+
+Looks (plain LoRAs for the T2V / I2V / FLF2V templates):
+
+| Key | Look | Size | Source | Output use |
+|---|---|---|---|---|
+| `crisp-enhance` | Sharper detail and contrast, polished cinematic finish (the most downloaded LTX-2.3 LoRA on Civitai) | 0.71 GB | vrgamedevgirl84 (HF) | Yes |
+| `soft-enhance` | Natural detail with softer contrast; mix with `crisp-enhance` to taste | 0.35 GB | vrgamedevgirl84 (HF) | Yes |
+| `fantasy-realism` | Live-action fantasy film: real skin and fabrics, practical sets, grounded light | 0.35 GB | vrgamedevgirl84 (HF) | Yes |
+| `scifi-cyberpunk` | Cinematic neo-noir sci-fi: neon cities, high-tech interfaces | 0.35 GB | vrgamedevgirl84 (HF) | Yes |
+| `framerush` | Modern action-movie look: explosions, chases, combat, motorbikes | 0.30 GB | Civitai | Yes |
+| `pixar-toon` | Stylized 3D animated feature: smooth surfaces, expressive characters, soft materials | 0.35 GB | vrgamedevgirl84 (HF) | Yes |
+| `pbr-3d` | Stylized PBR 3D animation like big-studio animated films. Trigger `PBRSty1e` | 0.33 GB | Civitai | No |
+| `painterly` | Painted look: visible brush strokes, layered paint textures, luminous light | 0.35 GB | vrgamedevgirl84 (HF) | Yes |
+| `fantasy-anime` | Hand-drawn, cel-shaded illustration (2D animation) | 0.35 GB | vrgamedevgirl84 (HF) | Yes |
+
+Starting points per style (copy into `DONUT_LORAS`; the Civitai keys need `CIVITAI_TOKEN`):
+
+| Style | `DONUT_LORAS` |
+|---|---|
+| Base for reference-driven projects (character / vehicle / location images, Blender layout) | `ingredients,msr,cameraman,human-motion,transition` |
+| Cinematic live action | base + `crisp-enhance,soft-enhance,fantasy-realism,3dreal` (+ `framerush,hardcut`) |
+| 3D animated film | base + `pixar-toon` (+ `pbr-3d`) |
+| Painterly stylized 3D | base + `painterly` (+ `pbr-3d`) |
+| 2D animated superhero, cel-shaded | base + `fantasy-anime` |
+| Sci-fi | add `scifi-cyberpunk`; sword fights: add `swordplay` |
+
+No open LoRA reproduces a specific studio's show (Arcane, Marvel or DC animated series); the LoRAs trained on those
+shows are character LoRAs of protected IP and are left out. Set such a look with reference or keyframe images drawn
+in that style (I2V, `msr`, `ingredients`) and the closest look LoRA at a low strength.
+
+`all` downloads every key above (~27 GB) and needs both `HF_TOKEN` and `CIVITAI_TOKEN`. Union Control
+(depth/pose/canny/normal guided video-to-video) is always installed with `ltx23`.
 
 ### `h3`
 
@@ -95,7 +153,7 @@ Use the workflows from ComfyUI's Template Library (Video → MiniMax H3); ComfyU
 ## Custom nodes
 
 ComfyUI-KJNodes and ComfyUI-VideoHelperSuite for every model set; ComfyUI-LTXVideo for `ltx25` and `ltx23`;
-ComfyUI-BFSNodes when `DONUT_LORAS` includes `motion-transfer`
+ComfyUI-BFSNodes when `DONUT_LORAS` includes `motion-transfer`; ComfyUI-Licon-MSR when it includes `msr`
 (+ comfyui_controlnet_aux and ComfyUI-Video-Depth-Anything when `DONUT_UNION=1`).
 Each node is pinned to a commit in the script; update the hash there to move to a newer version.
 Their `requirements.txt` are installed with the image's torch/torchvision/torchaudio versions as constraints,
@@ -104,8 +162,8 @@ so the image's CUDA build of torch is never replaced.
 ## Usage
 
 1. For `ltx25` or gated `ltx23` LoRAs: accept the licenses of those Lightricks repos on Hugging Face, and in
-   Vast → Settings → Environment Variables add `HF_TOKEN` (a **read-only** token).
-   Never put the token in this repo or in the template itself.
+   Vast → Settings → Environment Variables add `HF_TOKEN` (a **read-only** token). For Civitai LoRAs add
+   `CIVITAI_TOKEN` there too. Never put a token in this repo or in the template itself.
 2. Template: image `vastai/comfy:v0.42.1-cuda-12.9-py312`, disk ≥ 100 GB (≥ 120 GB for `ltx23` with `DONUT_LORAS=all` or `h3` with `DONUT_H3_R2V=1`), env
    `PROVISIONING_SCRIPT=<raw URL of provision_donut.sh>`, optionally `DONUT_MODEL=ltx23|ltx25|h3` (default `ltx23`)
    and `DONUT_LORAS=...`.

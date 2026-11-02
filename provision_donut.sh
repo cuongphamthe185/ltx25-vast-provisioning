@@ -3,9 +3,10 @@
 # Used as PROVISIONING_SCRIPT (raw URL) -> runs after Supervisor starts; output also shows in the
 # Instance Portal logs. ComfyUI waits for provisioning to finish before starting.
 # DONUT_MODEL picks the model set (default ltx23):
-#   ltx23  LTX-2.3 T2V / I2V / FLF2V / IC-LoRA Union Control (fp8). DONUT_LORAS adds video-to-video LoRAs
-#          (comma-separated keys, "all" or "none"; default motion-track, see ltx23_lora below).
-#          Gated LoRAs need HF_TOKEN from an account that accepted their license.
+#   ltx23  LTX-2.3 T2V / I2V / FLF2V / IC-LoRA Union Control (fp8). DONUT_LORAS adds LoRAs: video-to-video,
+#          reference, camera and style (comma-separated keys, "all" or "none"; default motion-track, see
+#          ltx23_lora below). Gated LoRAs need HF_TOKEN from an account that accepted their license;
+#          Civitai LoRAs need CIVITAI_TOKEN (a civitai.com API key in the Vast account env).
 #   ltx25  LTX-2.5 v2v with IC-LoRAs (int8). Needs HF_TOKEN (Vast account env var) with access to
 #          Lightricks/LTX-2.5 + Layout-To-Render.
 #   h3     MiniMax H3 T2V/I2V (pruned int8). No token needed. DONUT_H3_R2V=1 adds reference-to-video.
@@ -56,11 +57,28 @@ get() { # repo path dest_dir
     echo "FAIL $f"; return 1
   fi
 }
+civ() { # civitai_model_version_id file_name dest_dir; Civitai downloads need an API key (CIVITAI_TOKEN)
+  local tmp=/workspace/.hf_tmp/civitai_$2
+  if [ -s "$3/$2" ]; then echo "skip $2"; return; fi
+  if [ -z "${CIVITAI_TOKEN:-}" ]; then echo "FAIL $2 (CIVITAI_TOKEN not set)"; return 1; fi
+  mkdir -p /workspace/.hf_tmp
+  # abort a stalled transfer (< 100 KB/s for 60 s) instead of hanging the whole provisioning run
+  if curl -fsSL --retry 3 --connect-timeout 30 --speed-limit 102400 --speed-time 60 \
+       -H "Authorization: Bearer $CIVITAI_TOKEN" -o "$tmp" "https://civitai.com/api/download/models/$1" \
+   && mv "$tmp" "$3/$2"; then
+    echo "ok $2"
+  else
+    rm -f "$tmp"; echo "FAIL $2"; return 1
+  fi
+}
 
-# ltx23 video-to-video LoRAs selectable with DONUT_LORAS. Open: motion-track, edit-anything,
-# motion-transfer, ingredients; all others are gated (accept the license on the repo page, set HF_TOKEN).
+# ltx23 LoRAs selectable with DONUT_LORAS. Gated (accept the license on the repo page, set HF_TOKEN):
+# the Lightricks IC-LoRAs except motion-track. Civitai keys (civitai:<model version id>) need CIVITAI_TOKEN.
+# All others are open on Hugging Face.
 LTX23_LORAS="motion-track edit-anything motion-transfer clean-plate in-outpainting ingredients upscale deblur
-  decompression colorization relight hdr day-to-night dubit foley water-simulation instant-shave cross-eyed"
+  decompression colorization relight hdr day-to-night dubit foley water-simulation instant-shave cross-eyed
+  msr id-lora 3dreal cameraman transition human-motion crisp-enhance soft-enhance fantasy-realism
+  scifi-cyberpunk pixar-toon painterly fantasy-anime pbr-3d hardcut framerush swordplay camera-controls"
 ltx23_lora() { # key -> "repo file..." (a .json file is a workflow)
   local L=Lightricks/LTX-2.3-22b
   case "$1" in
@@ -82,12 +100,34 @@ ltx23_lora() { # key -> "repo file..." (a .json file is a workflow)
     water-simulation) echo "$L-IC-LoRA-Water-Simulation ltx-2.3-22b-ic-lora-water-simulation-0.9.safetensors" ;;
     instant-shave)   echo "$L-IC-LoRA-Instant-Shave ltx-2.3-22b-ic-lora-instant-shave-0.9.safetensors" ;;
     cross-eyed)      echo "$L-IC-LoRA-Cross-Eyed ltx-2.3-22b-ic-lora-cross-eyed-0.9.safetensors" ;;
+    # reference, camera and motion helpers
+    msr)             echo "LiconStudio/LTX-2.3-Multiple-Subject-Reference LTX-2.3-Licon-MSR-V2.safetensors" ;;
+    id-lora)         echo "Comfy-Org/ltx-2.3 split_files/loras/ltx-2.3-id-lora-talkvid-3k.safetensors" ;;
+    3dreal)          echo "fal/LTX-2.3-3DREAL-LoRA 3DREAL-strong-v2.safetensors" ;;
+    cameraman)       echo "Cseti/LTX2.3-22B_IC-LoRA-Cameraman_v2 LTX2.3-22B_IC-LoRA-Cameraman_v2_14000.safetensors" ;;
+    transition)      echo "joyfox/LTX-2.3-Transition-LORA ltx2.3-transition.safetensors" ;;
+    human-motion)    echo "vpakarinen/better-human-motion-ltx-lora motion_stabilizer_ltx_lora_v2.safetensors" ;;
+    # looks (plain LoRAs added on top of the T2V / I2V / FLF2V templates)
+    crisp-enhance)   echo "vrgamedevgirl84/LTX_2.3_Crisp_Enhance_Style_LoRa LTX2.3_Crisp_Enhance.safetensors" ;;
+    soft-enhance)    echo "vrgamedevgirl84/LTX_2.3_Soft_Enhance_Style_LoRa LTX2.3_Soft_Enhance.safetensors" ;;
+    fantasy-realism) echo "vrgamedevgirl84/LTX_2.3_Fantasy_Realism_Style_LoRa Fantasy_Realism.safetensors" ;;
+    scifi-cyberpunk) echo "vrgamedevgirl84/LTX_2.3_Cinematic_Sci-fi-Cyberpunk_Style_LoRa Cinematic_sci-fi-cyberpunk.safetensors" ;;
+    pixar-toon)      echo "vrgamedevgirl84/LTX_2.3_Pixar_Toon_Style_LoRa Pixar_Toon.safetensors" ;;
+    painterly)       echo "vrgamedevgirl84/LTX_2.3_Fantasy_Painterly_Style_LoRa Fantasy_Painterly.safetensors" ;;
+    fantasy-anime)   echo "vrgamedevgirl84/LTX_2.3_Fantasy_Anime_Style_LoRa Fantasy_Anime.safetensors" ;;
+    # Civitai: "civitai:<model version id> <file name to save as>"
+    pbr-3d)          echo "civitai:2964961 LTX2.3_pbrstyle_V1.1.safetensors" ;;
+    hardcut)         echo "civitai:2819456 ltx23_cinematic_hardcut.safetensors" ;;
+    framerush)       echo "civitai:3269911 FrameRush-V2_c2-st1000.safetensors" ;;
+    swordplay)       echo "civitai:2815367 LTX-2.3-swordplay.safetensors" ;;
+    camera-controls) echo "civitai:2944022 LTX2.3_CameraControls.safetensors" ;;
     *) return 1 ;;
   esac
 }
 LORAS=${DONUT_LORAS:-motion-track}
 [ "$LORAS" = all ] && LORAS=$LTX23_LORAS
 LORAS=${LORAS//,/ }
+LORAS=$(echo $LORAS)   # one space between keys, so the " key " checks below also match list ends and line breaks
 
 FAILS=0
 
@@ -140,7 +180,8 @@ ltx23)  # ~74 GB; files of ComfyUI's LTX-2.3 templates: T2V/I2V (dev + distilled
     read -r repo files <<< "$src"
     for p in $files; do
       d=$M/loras; [[ $p == *.json ]] && d=$COMFY/user/default/workflows
-      get "$repo" "$p" "$d" & PIDS+=($!)
+      if [[ $repo == civitai:* ]]; then civ "${repo#civitai:}" "$p" "$d" & PIDS+=($!)
+      else get "$repo" "$p" "$d" & PIDS+=($!); fi
     done
   done
   ;;
@@ -190,6 +231,11 @@ add_node https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite.git 4d907bee61e
 # the EditAnything motion-transfer LoRA runs through the BFS looping sampler
 if [ "$DONUT_MODEL" = ltx23 ] && [[ " $LORAS " == *" motion-transfer "* ]]; then
   add_node https://github.com/alisson-anjos/ComfyUI-BFSNodes.git 1e76045b19a99882f1331c9d322a26fac60ae9b8
+fi
+# the Multiple-Subject-Reference LoRA reads a reference video built by the Licon MSR node
+# (up to 4 subject images + a background image)
+if [ "$DONUT_MODEL" = ltx23 ] && [[ " $LORAS " == *" msr "* ]]; then
+  add_node https://github.com/liconstudio/ComfyUI-Licon-MSR.git 94a52bfec735ff6f802c480f7fe8fdac1d279a7f
 fi
 if [ "${DONUT_UNION:-0}" = "1" ]; then
   add_node https://github.com/Fannovel16/comfyui_controlnet_aux.git a587a4c1594524c1d2de5cd1a86cd868ff448e1c
