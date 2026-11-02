@@ -43,6 +43,9 @@ The files of ComfyUI's LTX-2.3 Text to Video, Image to Video, First-Last-Frame a
 
 Use the workflows from ComfyUI's Template Library (Video → LTX-2.3). Their sample inputs (images, videos) are
 not installed: load your own file into each Load Image / Load Video node before running.
+The script also saves 10-second copies of the T2V, I2V and FLF2V templates to the workflow list
+(`LTX-2.3_T2V_10s`, `LTX-2.3_I2V_10s`, `LTX-2.3_FLF2V_10s`); they are the bundled graphs with Duration set to 10
+(251 frames at 25 fps). Any template's length can also be changed in its Duration field.
 The ID-LoRA, Ingredients and Style Transition templates need extra LoRAs (`ingredients` key below for Ingredients).
 
 #### Video-to-video LoRAs (`DONUT_LORAS`)

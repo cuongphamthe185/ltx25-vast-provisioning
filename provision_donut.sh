@@ -198,8 +198,48 @@ fi
 pip freeze | grep -iE '^(torch|torchvision|torchaudio)==' | diff -q - $TORCH_PIN >/dev/null \
   || { echo "FAIL torch changed: $(pip freeze | grep -iE '^torch==')"; FAILS=$((FAILS+1)); }
 
+# ---- ltx23: copies of ComfyUI's bundled T2V / I2V / FLF2V templates with Duration set to 10 s ----
+# Built on the instance from the installed template package, so nothing upstream is stored in this repo.
+if [ "$DONUT_MODEL" = ltx23 ]; then
+  if ! python - "$COMFY/user/default/workflows" 10 <<'PY'
+import json, os, sys, importlib.util
+out_dir, secs = sys.argv[1], int(sys.argv[2])
+spec = importlib.util.find_spec("comfyui_workflow_templates_json")
+src = os.path.join(os.path.dirname(spec.origin), "templates")
+NON_WIDGET = {"IMAGE", "MASK", "IMAGE,MASK", "LATENT", "AUDIO", "VIDEO", "MODEL", "CLIP", "VAE"}
+for name, title in [("video_ltx2_3_t2v", "T2V"), ("video_ltx2_3_i2v", "I2V"), ("video_ltx2_3_flf2v", "FLF2V")]:
+    w = json.load(open(os.path.join(src, name + ".json"), encoding="utf-8"))
+    subs = {s["id"]: s for s in w.get("definitions", {}).get("subgraphs", [])}
+    inner = 0
+    for n in w["nodes"]:
+        sg = subs.get(n["type"])
+        if not sg:
+            continue
+        # the Duration primitive inside the subgraph (used directly by proxy-widget templates)
+        for x in sg["nodes"]:
+            if x["type"] == "PrimitiveInt" and x.get("title") == "Duration" and x["widgets_values"][0] == 5:
+                x["widgets_values"][0] = secs
+                inner += 1
+        # the value shown on the subgraph node itself, when the template stores it there
+        vals = n.get("widgets_values") or []
+        ins = [i for i in sg["inputs"] if i.get("type") not in NON_WIDGET]
+        for k, i in enumerate(ins):
+            if i.get("label") == "duration" and k < len(vals) and vals[k] == 5:
+                vals[k] = secs
+    if inner != 1:
+        sys.exit(f"{name}: expected one Duration primitive set to 5, found {inner}")
+    out = f"LTX-2.3_{title}_{secs}s.json"
+    with open(os.path.join(out_dir, out), "w", encoding="utf-8") as f:
+        json.dump(w, f)
+    print("workflow", out)
+PY
+  then
+    echo "FAIL 10 s workflows"; FAILS=$((FAILS+1))
+  fi
+fi
+
 # ---- ltx25: official Layout-to-Render workflow, patched to the int8 weights we downloaded ----
-# ltx23 / h3 use the workflow templates bundled with ComfyUI (Template Library -> Video)
+# ltx23 / h3 use the workflow templates bundled with ComfyUI (Template Library -> Video), plus the 10 s copies above
 WF=
 if [ "$DONUT_MODEL" = ltx25 ]; then
   WF=$COMFY/user/default/workflows/LTX-2.5_ICLoRA_Layout_To_Render_int8.json
