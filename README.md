@@ -8,7 +8,7 @@ Provisioning script for a Vast.ai instance running the `vastai/comfy:v0.42.1` im
 
 | Value | Model | Size | HF token |
 |---|---|---|---|
-| `ltx23` (default) | LTX-2.3 IC-LoRA Union Control, fp8, plus the video-to-video LoRAs picked with `DONUT_LORAS` | ~42 GB + LoRAs | Only for gated LoRAs |
+| `ltx23` (default) | LTX-2.3 text/image-to-video, first-last-frame and IC-LoRA Union Control, fp8, plus the video-to-video LoRAs picked with `DONUT_LORAS` | ~74 GB + LoRAs | Only for gated LoRAs |
 | `ltx25` | LTX-2.5 video-to-video with IC-LoRAs (Layout-to-Render, Union Control), int8 | ~42 GB | Required (gated) |
 | `h3` | MiniMax H3 text/image-to-video with audio, pruned int8 | ~44 GB (+23 GB with `DONUT_H3_R2V=1`) | Not needed |
 
@@ -28,19 +28,22 @@ rewrites the model names to the int8 files above (`LTX-2.5_ICLoRA_Layout_To_Rend
 
 ### `ltx23`
 
-The files of ComfyUI's LTX-2.3 IC-LoRA Union Control template, plus the spatial upscaler.
+The files of ComfyUI's LTX-2.3 Text to Video, Image to Video, First-Last-Frame and IC-LoRA Union Control templates.
 
 | Type | File | Folder | Source repo |
 |---|---|---|---|
-| Checkpoint | `ltx-2.3-22b-distilled-fp8` (29.5 GB) | `checkpoints` | Lightricks/LTX-2.3-fp8 |
+| Checkpoint (FLF2V, IC-LoRA) | `ltx-2.3-22b-distilled-fp8` (29.5 GB) | `checkpoints` | Lightricks/LTX-2.3-fp8 |
+| Checkpoint (T2V, I2V) | `ltx-2.3-22b-dev-fp8` (29.2 GB) | `checkpoints` | Lightricks/LTX-2.3-fp8 |
+| LoRA (T2V, I2V) | `ltx_2.3_22b_distilled_1.1_lora_dynamic_fro09_avg_rank_111_bf16` (2.7 GB) | `loras` | Comfy-Org/ltx-2.3 |
 | Text encoder | `gemma_3_12B_it_fp4_mixed` (9.45 GB) | `text_encoders` | Comfy-Org/ltx-2 |
 | LoRA | `gemma-3-12b-it-abliterated_lora_rank64_bf16` | `loras` | Comfy-Org/ltx-2 |
 | IC-LoRA | `ltx-2.3-22b-ic-lora-union-control-ref0.5` | `loras` | Lightricks/LTX-2.3-22b-IC-LoRA-Union-Control |
 | Geometry | `moge_2_vitl_normal_fp16` | `geometry_estimation` | Comfy-Org/MoGe |
 | Latent upscaler | `ltx-2.3-spatial-upscaler-x2-1.1` | `latent_upscale_models` | Lightricks/LTX-2.3 |
 
-Use the workflows from ComfyUI's Template Library (Video → LTX-2.3). The FLF2V and IC-LoRA templates use this
-checkpoint; the T2V/I2V templates expect `ltx-2.3-22b-dev-fp8` plus the distilled LoRA, which are not downloaded.
+Use the workflows from ComfyUI's Template Library (Video → LTX-2.3). Their sample inputs (images, videos) are
+not installed: load your own file into each Load Image / Load Video node before running.
+The ID-LoRA, Ingredients and Style Transition templates need extra LoRAs (`ingredients` key below for Ingredients).
 
 #### Video-to-video LoRAs (`DONUT_LORAS`)
 
@@ -100,7 +103,7 @@ so the image's CUDA build of torch is never replaced.
 1. For `ltx25` or gated `ltx23` LoRAs: accept the licenses of those Lightricks repos on Hugging Face, and in
    Vast → Settings → Environment Variables add `HF_TOKEN` (a **read-only** token).
    Never put the token in this repo or in the template itself.
-2. Template: image `vastai/comfy:v0.42.1-cuda-12.9-py312`, disk ≥ 100 GB (≥ 120 GB for `h3` with `DONUT_H3_R2V=1`), env
+2. Template: image `vastai/comfy:v0.42.1-cuda-12.9-py312`, disk ≥ 100 GB (≥ 120 GB for `ltx23` with `DONUT_LORAS=all` or `h3` with `DONUT_H3_R2V=1`), env
    `PROVISIONING_SCRIPT=<raw URL of provision_donut.sh>`, optionally `DONUT_MODEL=ltx23|ltx25|h3` (default `ltx23`)
    and `DONUT_LORAS=...`.
 3. Rent an instance. ComfyUI stays on "Loading" until provisioning ends.
@@ -109,8 +112,9 @@ so the image's CUDA build of torch is never replaced.
    (first line shows the model set and GPU, last line `READY` or `FAILED: …`). `/workspace/.donut_ready` is created
    only when every download, node install and workflow check succeeded.
 4. Check the network line early: before the big downloads the script times one ~0.7 GB file and writes
-   `network N MB/s`, or `SLOW NETWORK: N MB/s` when below `DONUT_MIN_MBPS` (default 50 MB/s, ~15 min for a
-   ~45 GB set). On a slow host, destroy the instance and rent another. While downloading, the log gets a
+   `network N MB/s`, or `SLOW NETWORK: N MB/s` when below `DONUT_MIN_MBPS` (default 50 MB/s, ~25 min for the
+   ~74 GB `ltx23` set). The file is small, so the number reads low on fast hosts (101 MB/s measured on a host that
+   then downloaded at ~700 MB/s); trust the `progress` lines for the real speed. On a slow host, destroy the instance and rent another. While downloading, the log gets a
    `progress … GB in models, N MB/s` line every minute, and the status file ends with the total download time.
    The Docker image pull before the script starts is not measured, so filter hosts by network speed when renting
    (≥ 2 Gbps advertised; a host advertising 812 Mbps delivered ~100 Mbps in a test).
@@ -126,7 +130,9 @@ In a snapshot of RTX 4090 offers (2026-10-29), 35 of 43 could run the `cuda-12.9
 - Pick hosts with ≥ 64 GB RAM: none of the model sets fits in 24 GB VRAM together with its text encoder, so ComfyUI
   moves the text encoder (and for `ltx23` part of the 29.5 GB checkpoint) to system RAM.
 - `ltx25`: transformer 21.5 GB + text encoder 15.4 GB; leaves about 2.5 GB VRAM while sampling.
-- `ltx23`: the fp8 checkpoint is larger than 24 GB, so part of it is streamed from RAM each step (slower).
+- `ltx23`: both fp8 checkpoints are larger than 24 GB, so part of the model is streamed from RAM each step (slower).
+  Measured on a 4090 (2026-11-02): the IC-LoRA Union Control template at 1280×704, 89 frames, 8 steps took ~65 s
+  including the first model load.
 - `h3`: start with 5 s clips at ~768×512 and the 8-step turbo LoRA, then raise resolution/length while
   watching VRAM. Do not install `ComfyUI-MiniMaxH3-Cache`.
 

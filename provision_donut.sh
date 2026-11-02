@@ -3,7 +3,7 @@
 # Used as PROVISIONING_SCRIPT (raw URL) -> runs after Supervisor starts; output also shows in the
 # Instance Portal logs. ComfyUI waits for provisioning to finish before starting.
 # DONUT_MODEL picks the model set (default ltx23):
-#   ltx23  LTX-2.3 IC-LoRA Union Control (fp8). DONUT_LORAS adds video-to-video LoRAs
+#   ltx23  LTX-2.3 T2V / I2V / FLF2V / IC-LoRA Union Control (fp8). DONUT_LORAS adds video-to-video LoRAs
 #          (comma-separated keys, "all" or "none"; default motion-track, see ltx23_lora below).
 #          Gated LoRAs need HF_TOKEN from an account that accepted their license.
 #   ltx25  LTX-2.5 v2v with IC-LoRAs (int8). Needs HF_TOKEN (Vast account env var) with access to
@@ -45,7 +45,7 @@ echo "torch pins: $(tr '\n' ' ' < $TORCH_PIN)"
 pip install -q -U -c $TORCH_PIN "huggingface_hub[hf_xet]" >/dev/null
 export HF_HUB_ENABLE_HF_TRANSFER=0 HF_XET_HIGH_PERFORMANCE=1
 
-# ---- models (~42-67 GB depending on DONUT_MODEL), downloaded in parallel ----
+# ---- models (~42-74 GB depending on DONUT_MODEL), downloaded in parallel ----
 status "downloading models ($DONUT_MODEL)"
 get() { # repo path dest_dir
   local f; f=$(basename "$2")
@@ -94,7 +94,7 @@ FAILS=0
 # ---- network check: time one real ~0.7 GB file before the parallel downloads start ----
 # Same file for every model set so results compare across hosts; "SLOW NETWORK" in the status file
 # means this host will take far too long (the 9 GB image pull before this script is not measured).
-MIN_MBPS=${DONUT_MIN_MBPS:-50}   # MB/s; at 50 MB/s a ~45 GB model set takes ~15 min
+MIN_MBPS=${DONUT_MIN_MBPS:-50}   # MB/s; at 50 MB/s the ~74 GB ltx23 set takes ~25 min
 SPEED_FILE=moge_2_vitl_normal_fp16.safetensors
 if [ -s "$M/geometry_estimation/$SPEED_FILE" ]; then
   status "network check skipped ($SPEED_FILE already present)"
@@ -126,8 +126,10 @@ ltx25)  # ~42 GB, gated
   get Lightricks/LTX-2.5-22b-IC-LoRA-Layout-To-Render ltx-2.5-22b-ic-lora-layout-to-render-1.0.safetensors $M/loras & PIDS+=($!)
   get Lightricks/LTX-2.3-22b-IC-LoRA-Union-Control ltx-2.3-22b-ic-lora-union-control-ref0.5.safetensors $M/loras & PIDS+=($!)
   ;;
-ltx23)  # ~42 GB; files of ComfyUI's LTX-2.3 IC-LoRA Union Control template + spatial upscaler
+ltx23)  # ~74 GB; files of ComfyUI's LTX-2.3 templates: T2V/I2V (dev + distilled LoRA), FLF2V and IC-LoRA (distilled)
   get Lightricks/LTX-2.3-fp8 ltx-2.3-22b-distilled-fp8.safetensors $M/checkpoints & PIDS+=($!)
+  get Lightricks/LTX-2.3-fp8 ltx-2.3-22b-dev-fp8.safetensors $M/checkpoints & PIDS+=($!)
+  get Comfy-Org/ltx-2.3 split_files/loras/ltx_2.3_22b_distilled_1.1_lora_dynamic_fro09_avg_rank_111_bf16.safetensors $M/loras & PIDS+=($!)
   get Comfy-Org/ltx-2 split_files/text_encoders/gemma_3_12B_it_fp4_mixed.safetensors $M/text_encoders & PIDS+=($!)
   get Comfy-Org/ltx-2 split_files/loras/gemma-3-12b-it-abliterated_lora_rank64_bf16.safetensors $M/loras & PIDS+=($!)
   get Lightricks/LTX-2.3-22b-IC-LoRA-Union-Control ltx-2.3-22b-ic-lora-union-control-ref0.5.safetensors $M/loras & PIDS+=($!)
