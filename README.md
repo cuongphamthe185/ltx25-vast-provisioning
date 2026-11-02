@@ -134,8 +134,9 @@ In a snapshot of RTX 4090 offers (2026-10-29), 35 of 43 could run the `cuda-12.9
   moves the text encoder (and for `ltx23` part of the 29.5 GB checkpoint) to system RAM.
 - `ltx25`: transformer 21.5 GB + text encoder 15.4 GB; leaves about 2.5 GB VRAM while sampling.
 - `ltx23`: both fp8 checkpoints are larger than 24 GB, so part of the model is streamed from RAM each step (slower).
-  Measured on a 4090 (2026-11-02): the IC-LoRA Union Control template at 1280×704, 89 frames, 8 steps took ~65 s
-  including the first model load.
+  Measured on a 4090 at 1280×704 (2026-11-02): 5 s clips took ~100 s for T2V (first run, includes model load),
+  ~36 s for I2V, ~65 s for IC-LoRA Union Control; the 10 s copies took ~127 s for T2V (first run), ~71 s for I2V
+  and ~126 s for FLF2V. A 10 s run uses ~40 GB of host RAM, so prefer hosts with ≥ 96 GB RAM for 10 s clips.
 - `h3`: start with 5 s clips at ~768×512 and the 8-step turbo LoRA, then raise resolution/length while
   watching VRAM. Do not install `ComfyUI-MiniMaxH3-Cache`.
 
