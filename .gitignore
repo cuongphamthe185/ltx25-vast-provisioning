@@ -1,6 +1,9 @@
 # Local research notes, kept out of the repo
 docs/
 
+# Reference videos downloaded for analysis
+source/
+
 # AI agent instruction files
 AGENTS.md
 CLAUDE.md
