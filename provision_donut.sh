@@ -10,8 +10,12 @@
 #   ltx25  LTX-2.5 v2v with IC-LoRAs (int8). Needs HF_TOKEN (Vast account env var) with access to
 #          Lightricks/LTX-2.5 + Layout-To-Render.
 #   h3     MiniMax H3 T2V/I2V (pruned int8). No token needed. DONUT_H3_R2V=1 adds reference-to-video.
-#          Check the MiniMax H3 license territory rules before renting a host (see README).
+#   h3swap MiniMax H3 Ref2VA with the BFS Character Swap v1.1 and Motion Transfer LoRAs and their workflows:
+#          replace the person in a video with the person (face, hair, clothes) in a reference image.
+#          No token needed. Check the MiniMax H3 license territory rules before renting a host (see README).
 # Optional: DONUT_UNION=1 also installs Union Control preprocessors (depth / pose / canny).
+# Optional: DONUT_EXTRA_LORAS="hf:<owner>/<repo>/<file>,civitai:<version id>,https://..." downloads more LoRAs
+#           into models/loras for any model set. On a running instance: bash /workspace/donut_add.sh <same source>.
 # Log: /workspace/donut_provision.log   Status: /workspace/donut_status.txt
 # Done marker: /workspace/.donut_ready (only written when every step succeeded)
 set -uo pipefail
@@ -23,8 +27,8 @@ rm -f /workspace/.donut_ready
 DONUT_MODEL=${DONUT_MODEL:-ltx23}
 status "start model=$DONUT_MODEL gpu=$(nvidia-smi --query-gpu=name,memory.total --format=csv,noheader 2>/dev/null | head -1)"
 case "$DONUT_MODEL" in
-  ltx25|ltx23|h3) ;;
-  *) status "FAILED: unknown DONUT_MODEL=$DONUT_MODEL (use ltx25, ltx23 or h3)"; exit 1 ;;
+  ltx25|ltx23|h3|h3swap) ;;
+  *) status "FAILED: unknown DONUT_MODEL=$DONUT_MODEL (use ltx25, ltx23, h3 or h3swap)"; exit 1 ;;
 esac
 
 # the base image syncs ComfyUI into /workspace on first boot and runs it from there; wait for it.
@@ -37,6 +41,18 @@ echo "COMFY=$COMFY"
 M=$COMFY/models
 mkdir -p $M/diffusion_models $M/checkpoints $M/text_encoders $M/vae $M/latent_upscale_models $M/loras \
   $M/geometry_estimation $COMFY/user/default/workflows
+[ "$DONUT_MODEL" = h3swap ] && mkdir -p $M/vae_approx $M/RMBG/BiRefNet
+FAILS=0
+
+# the h3swap workflows use core nodes added in ComfyUI 0.39.2
+if [ "$DONUT_MODEL" = h3swap ]; then
+  CV=$(cd $COMFY && python -c 'from comfyui_version import __version__; print(__version__)' 2>/dev/null)
+  if printf '%s\n' 0.39.2 "${CV:-0}" | sort -V -C; then
+    echo "ComfyUI $CV"
+  else
+    echo "FAIL ComfyUI ${CV:-unknown} is older than 0.39.2 (h3swap workflows)"; FAILS=$((FAILS+1))
+  fi
+fi
 
 # keep the image's CUDA build of torch: custom node requirements must not up/downgrade it
 TORCH_PIN=/workspace/.torch_constraints.txt
@@ -129,7 +145,43 @@ LORAS=${DONUT_LORAS:-motion-track}
 LORAS=${LORAS//,/ }
 LORAS=$(echo $LORAS)   # one space between keys, so the " key " checks below also match list ends and line breaks
 
-FAILS=0
+# ---- donut_add.sh: download one more model file by link, during provisioning (DONUT_EXTRA_LORAS) or later ----
+ADD=/workspace/donut_add.sh
+cat > $ADD <<'ADDSH'
+#!/bin/bash
+# Download one model file into /workspace/ComfyUI/models/<folder> (default loras), then press R in ComfyUI.
+#   bash /workspace/donut_add.sh hf:<owner>/<repo>/<path in repo> [folder]   (gated repos need HF_TOKEN)
+#   bash /workspace/donut_add.sh civitai:<model version id> [folder]         (needs CIVITAI_TOKEN)
+#   bash /workspace/donut_add.sh https://<direct link> [folder]              (saved under the name the server sends)
+set -uo pipefail
+src=${1:?usage: donut_add.sh <hf:owner/repo/file | civitai:version id | https://...> [folder]}
+dir=/workspace/ComfyUI/models/${2:-loras}
+mkdir -p "$dir" /workspace/.hf_tmp
+tmp=$(mktemp -d /workspace/.hf_tmp/add.XXXXXX)
+trap 'rm -rf "$tmp"' EXIT
+fetch() { # url [token]; Authorization is not forwarded when the link redirects to another host
+  local h=(); [ -n "${2:-}" ] && h=(-H "Authorization: Bearer $2")
+  (cd "$tmp" && curl -fsSL --retry 3 --connect-timeout 30 --speed-limit 102400 --speed-time 60 "${h[@]}" -OJ "$1")
+}
+case "$src" in
+  hf:*/*/*) p=${src#hf:}; repo=$(echo "$p" | cut -d/ -f1-2); file=${p#*/*/}
+            [ -s "$dir/$(basename "$file")" ] && { echo "skip $(basename "$file")"; exit 0; }
+            hf download "$repo" "$file" --local-dir "$tmp/hf" >/dev/null && mv "$tmp/hf/$file" "$tmp/" ;;
+  civitai:*) [ -n "${CIVITAI_TOKEN:-}" ] || { echo "FAIL $src (CIVITAI_TOKEN not set)"; exit 1; }
+             fetch "https://civitai.com/api/download/models/${src#civitai:}" "$CIVITAI_TOKEN" ;;
+  https://huggingface.co/*) fetch "$src" "${HF_TOKEN:-}" ;;
+  https://civitai.com/*)    fetch "$src" "${CIVITAI_TOKEN:-}" ;;
+  https://*)                fetch "$src" ;;
+  *) echo "FAIL $src (use hf:<owner>/<repo>/<file>, civitai:<version id> or https://...)"; exit 1 ;;
+esac
+f=$(find "$tmp" -maxdepth 1 -type f ! -name '.*' | head -1)
+[ -n "$f" ] && [ -s "$f" ] || { echo "FAIL $src"; exit 1; }
+n=$(basename "$f")
+if [ -s "$dir/$n" ]; then echo "skip $n"; else mv "$f" "$dir/$n" && echo "ok $n -> $dir"; fi
+ADDSH
+chmod +x $ADD
+EXTRA=${DONUT_EXTRA_LORAS:-}
+EXTRA=$(echo ${EXTRA//,/ })
 
 # ---- network check: time one real ~0.7 GB file before the parallel downloads start ----
 # Same file for every model set so results compare across hosts; "SLOW NETWORK" in the status file
@@ -197,7 +249,29 @@ h3)  # ~44 GB (+23 GB with DONUT_H3_R2V=1); files of ComfyUI's MiniMax H3 templa
     get $H loras/minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors $M/loras & PIDS+=($!)
   fi
   ;;
+h3swap)  # ~55 GB; the models of the BFS Character Swap v1.1 and Motion Transfer v1.0 workflows (Alissonerdx)
+  H=Comfy-Org/MiniMax-H3; A=Alissonerdx/Minimax-H3-ComfyUI
+  get $H diffusion_models/minimax_h3_ref2va_pruned_int8_convrot.safetensors $M/diffusion_models & PIDS+=($!)
+  get $H text_encoders/qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors $M/text_encoders & PIDS+=($!)
+  get $H vae/minimax_h3_video_vae_fp16.safetensors $M/vae & PIDS+=($!)
+  get $H vae/minimax_h3_audio_vae_fp32.safetensors $M/vae & PIDS+=($!)
+  # vision-language model that looks at the reference image and writes the swap prompt
+  get Comfy-Org/MOSS-Image text_encoders/qwen3.5_9b_w4a8_gptq.safetensors $M/text_encoders & PIDS+=($!)
+  get drbaph/MiniMax-H3-Turbo-Lora-ComfyUI experimental/minimax_h3_dmd_ref2va_8step_turbo_pruned.safetensors $M/loras & PIDS+=($!)
+  # swap / motion / head LoRAs, and the LMS LoRA + latent upscaler of the optional second pass (1280x704)
+  for f in minimax_h3_character_swap_v1.1_ref2va_fro minimax_h3_motion_transfer_v1.0_ref2va \
+           minimax_h3_head_swap_v1.0_r32 minimax_h3_lms_v1.0_r64; do
+    get $A loras/$f.safetensors $M/loras & PIDS+=($!)
+  done
+  get $A latent_upscaler/h3_upscaler_lms_v0.1.safetensors $M/latent_upscale_models & PIDS+=($!)
+  get Kijai/MiniMax-H3-TAE vae_approx/taeh3.safetensors $M/vae_approx & PIDS+=($!)
+  # background removal of the reference image (ComfyUI-RMBG would fetch it on the first run otherwise)
+  for f in BiRefNet-general.safetensors birefnet.py BiRefNet_config.py config.json; do
+    get 1038lab/BiRefNet $f $M/RMBG/BiRefNet & PIDS+=($!)
+  done
+  ;;
 esac
+for s in $EXTRA; do bash $ADD "$s" & PIDS+=($!); done
 
 # a progress line every 60 s while the models download, so a slow host shows up early in the log
 on_disk() { du -sB1 /workspace/.hf_tmp $M 2>/dev/null | awk '{ s += $1 } END { print s + 0 }'; }  # allocated bytes, not apparent size
@@ -213,24 +287,34 @@ MON=$!
 # skip Git LFS files (example images/videos): their download can fail and abort the checkout
 export GIT_LFS_SKIP_SMUDGE=1
 cd $COMFY/custom_nodes
-add_node() { # git_url commit
-  local d; d=$(basename "$1" .git)
+add_node() { # git_url commit [pip packages to install instead of the node's requirements.txt]
+  local d req; d=$(basename "$1" .git)
   if [ ! -d "$d" ]; then
     git init -q "$d" && git -C "$d" fetch -q --depth 1 "$1" "$2" && git -C "$d" checkout -q FETCH_HEAD \
       || { echo "FAIL node $d"; rm -rf "$d"; FAILS=$((FAILS+1)); return; }
   fi
-  if [ -f "$d/requirements.txt" ] && ! pip install -q -c $TORCH_PIN -r "$d/requirements.txt" >/dev/null; then
+  if [ $# -ge 3 ]; then read -ra req <<< "$3"
+  elif [ -f "$d/requirements.txt" ]; then req=(-r "$d/requirements.txt")
+  else req=(); fi
+  if [ ${#req[@]} -gt 0 ] && ! pip install -q -c $TORCH_PIN "${req[@]}" >/dev/null; then
     echo "FAIL pip $d"; FAILS=$((FAILS+1)); return
   fi
   echo "node $d $(git -C "$d" rev-parse --short HEAD)"
 }
 # MiniMax H3 runs on core ComfyUI nodes; the LTX nodes are only needed for the LTX model sets
-[ "$DONUT_MODEL" != h3 ] && add_node https://github.com/Lightricks/ComfyUI-LTXVideo.git 220e1d45aa0469f518e982102fca4dca92a61862
+[[ $DONUT_MODEL == ltx* ]] && add_node https://github.com/Lightricks/ComfyUI-LTXVideo.git 220e1d45aa0469f518e982102fca4dca92a61862
 add_node https://github.com/kijai/ComfyUI-KJNodes.git 37a6c45a07bb06cc392431ddbbc741e691c467f4
 add_node https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite.git 4d907bee61e92c2e65af3bd6383a4e4d356126d1
-# the EditAnything motion-transfer LoRA runs through the BFS looping sampler
-if [ "$DONUT_MODEL" = ltx23 ] && [[ " $LORAS " == *" motion-transfer "* ]]; then
+# the EditAnything motion-transfer LoRA runs through the BFS looping sampler; the h3swap Shot Planner
+# workflows (long videos split into shots, rendered and joined) need BFSNodes >= 1.113.0 (this pin: 1.115.33)
+if [ "$DONUT_MODEL" = h3swap ] || { [ "$DONUT_MODEL" = ltx23 ] && [[ " $LORAS " == *" motion-transfer "* ]]; }; then
   add_node https://github.com/alisson-anjos/ComfyUI-BFSNodes.git 1e76045b19a99882f1331c9d322a26fac60ae9b8
+fi
+if [ "$DONUT_MODEL" = h3swap ]; then
+  # only the BiRefNet node is used; its full requirements (GroundingDINO, SAM, onnxruntime...) are skipped,
+  # and the pack loads each of its node files on its own, so the unused ones just fail to import
+  add_node https://github.com/1038lab/ComfyUI-RMBG.git a66a5e641a54988d80ed6aad18946081c85f309e "timm einops kornia"
+  add_node https://github.com/LBH-123-AI/Comfyui_Minimax_h3_latent_Upscaler.git 40316cf008b2fd8663263270669eb4da23f89d2c
 fi
 # the Multiple-Subject-Reference LoRA reads a reference video built by the Licon MSR node
 # (up to 4 subject images + a background image)
@@ -299,6 +383,61 @@ if [ "$DONUT_MODEL" = ltx25 ]; then
   fi
 fi
 
+# ---- h3swap: the BFS Character Swap v1.1 and Motion Transfer v1.0 workflows (native and Shot Planner) ----
+# Pinned to the repo revision they were checked against; their model loaders keep the author's folders
+# ("Downloads/", "minimax/"), so the file names are reset to the files downloaded above.
+WFPY=/workspace/.donut_wf.py
+cat > $WFPY <<'PY'
+import json, os, sys
+# the Motion Transfer planner loads the int8 H3 text encoder (25 GB); the nvfp4 one (15.7 GB) is downloaded instead
+RENAME = {"qwen3vl_32b_minimax_h3_int8_convrot.safetensors": "qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors"}
+def nodes(w):
+    yield from w.get("nodes", [])
+    for sg in w.get("definitions", {}).get("subgraphs", []):
+        yield from sg.get("nodes", [])
+def model_widgets(n, keys=("widgets_values",)):  # (container, key) of every widget holding a model file name
+    out = []
+    for k in keys:
+        v = n.get(k)
+        items = enumerate(v) if isinstance(v, list) else v.items() if isinstance(v, dict) else []
+        out += [(v, i) for i, x in items if isinstance(x, str) and x.endswith(".safetensors")]
+    return out
+mode, args = sys.argv[1], sys.argv[2:]
+if mode == "patch":  # src_dir out_dir name...
+    for name in args[2:]:
+        w = json.load(open(os.path.join(args[0], name), encoding="utf-8"))
+        for n in nodes(w):
+            for v, i in model_widgets(n, ("widgets_values", "widgets_values_named")):
+                b = v[i].replace("\\", "/").rsplit("/", 1)[-1]
+                v[i] = RENAME.get(b, b)
+        json.dump(w, open(os.path.join(args[1], name), "w", encoding="utf-8"))
+        print("workflow", name)
+else:  # check models_dir workflow...: every model an enabled node loads must be on disk
+    have = {f for _, _, fs in os.walk(args[0]) for f in fs}
+    bad = 0
+    for path in args[1:]:
+        for n in nodes(json.load(open(path, encoding="utf-8"))):
+            if n.get("mode", 0) != 0:  # 2 = muted, 4 = bypassed
+                continue
+            for v, i in model_widgets(n):
+                if v[i] not in have:
+                    print(f"FAIL {os.path.basename(path)} needs missing model {v[i]}"); bad += 1
+    sys.exit(1 if bad else 0)
+PY
+H3WF=()
+if [ "$DONUT_MODEL" = h3swap ]; then
+  for w in minimax_h3_character_swap_workflow_native_nodes_v1.1 minimax_h3_character_swap_workflow_v1.1 \
+           minimax_h3_motion_transfer_workflow_native_nodes_v1.0 minimax_h3_motion_transfer_workflow_planner_v1.0; do
+    if hf download Alissonerdx/Minimax-H3-ComfyUI workflows/$w.json --revision 64244a4fdf226c8d37b8470d1893b6ba9ab54de1 \
+         --local-dir /workspace/.hf_tmp/h3wf >/dev/null \
+     && python $WFPY patch /workspace/.hf_tmp/h3wf/workflows $COMFY/user/default/workflows $w.json; then
+      H3WF+=("$COMFY/user/default/workflows/$w.json")
+    else
+      echo "FAIL workflow $w"; FAILS=$((FAILS+1))
+    fi
+  done
+fi
+
 status "waiting for model downloads"
 for p in "${PIDS[@]}"; do   # only the downloads; a bare wait would also wait on the tee log process and hang
   wait "$p" || FAILS=$((FAILS+1))
@@ -314,6 +453,9 @@ if [ -s "$WF" ]; then
   for f in $(grep -oE '[A-Za-z0-9._-]+\.safetensors' "$WF" | sort -u); do
     [ -n "$(find $M -name "$f" -print -quit)" ] || { echo "FAIL workflow needs missing model $f"; FAILS=$((FAILS+1)); }
   done
+fi
+if [ ${#H3WF[@]} -gt 0 ]; then
+  python $WFPY check $M "${H3WF[@]}" || FAILS=$((FAILS+1))
 fi
 
 # ComfyUI is held until provisioning finishes, so it starts with the new nodes/models; no restart needed

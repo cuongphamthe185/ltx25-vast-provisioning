@@ -11,6 +11,9 @@ Provisioning script for a Vast.ai instance running the `vastai/comfy:v0.42.1` im
 | `ltx23` (default) | LTX-2.3 text/image-to-video, first-last-frame and IC-LoRA Union Control, fp8, plus the video-to-video LoRAs picked with `DONUT_LORAS` | ~74 GB + LoRAs | Only for gated LoRAs |
 | `ltx25` | LTX-2.5 video-to-video with IC-LoRAs (Layout-to-Render, Union Control), int8 | ~42 GB | Required (gated) |
 | `h3` | MiniMax H3 text/image-to-video with audio, pruned int8 | ~44 GB (+23 GB with `DONUT_H3_R2V=1`) | Not needed |
+| `h3swap` | MiniMax H3 reference-to-video with the Character Swap and Motion Transfer LoRAs: replace the person in a video with the person in a reference image | ~55 GB | Not needed |
+
+Any model set can also download extra LoRAs, see [Adding LoRAs](#adding-loras).
 
 ### `ltx25`
 
@@ -150,10 +153,67 @@ The files of ComfyUI's MiniMax H3 templates (all from Comfy-Org/MiniMax-H3), plu
 
 Use the workflows from ComfyUI's Template Library (Video → MiniMax H3); ComfyUI ≥ 0.30.0 is required.
 
+### `h3swap`
+
+Video-to-video person replacement with the BFS LoRAs of
+[Alissonerdx/Minimax-H3-ComfyUI](https://huggingface.co/Alissonerdx/Minimax-H3-ComfyUI): a guide video (the
+performance: motion, pose, hands, gaze, lips, background, light, camera) + a reference picture (the person: face,
+hair, body, clothes) → the same video with that person. The H3 T2V/I2V model of `h3` is not installed.
+
+| Type | File | Folder | Source repo | Output use |
+|---|---|---|---|---|
+| Diffusion model | `minimax_h3_ref2va_pruned_int8_convrot` (21.0 GB) | `diffusion_models` | Comfy-Org/MiniMax-H3 | H3 license |
+| Text encoder | `qwen3vl_32b_minimax_h3_nvfp4_awq` (15.7 GB) | `text_encoders` | Comfy-Org/MiniMax-H3 | H3 license |
+| VAE | `minimax_h3_video_vae_fp16`, `minimax_h3_audio_vae_fp32` (5.5 GB) | `vae` | Comfy-Org/MiniMax-H3 | H3 license |
+| Prompt writer (VLM) | `qwen3.5_9b_w4a8_gptq` (7.3 GB): looks at the reference picture and writes the swap prompt | `text_encoders` | Comfy-Org/MOSS-Image | Yes (Apache-2.0) |
+| Turbo LoRA | `minimax_h3_dmd_ref2va_8step_turbo_pruned` (2.3 GB), 8 steps | `loras` | drbaph/MiniMax-H3-Turbo-Lora-ComfyUI | Yes (Apache-2.0) |
+| LoRA | `minimax_h3_character_swap_v1.1_ref2va_fro` (0.08 GB): replaces the main person of the guide video, strength 1.0, prompt prefix `body_swap:` | `loras` | Alissonerdx | Yes (BFS Character Swap License: no hosted API/SaaS, credit above US $1M yearly revenue) |
+| LoRA | `minimax_h3_motion_transfer_v1.0_ref2va` (0.18 GB): 1–4 pictures with roles set in the prompt (several people, clothes, objects, setting) take the guide's motion | `loras` | Alissonerdx | Yes (BFS Motion Transfer License, same terms) |
+| LoRA | `minimax_h3_head_swap_v1.0_r32` (0.31 GB): head only, the author's "research model"; can be added to the Character Swap graph to try better lip sync | `loras` | Alissonerdx | Unclear (no license stated) |
+| Second pass | `minimax_h3_lms_v1.0_r64` LoRA (1.2 GB) + `h3_upscaler_lms_v0.1` latent upscaler (0.7 GB), up to 1280×704 | `loras`, `latent_upscale_models` | Alissonerdx | Unclear (no license stated) |
+| Preview decoder | `taeh3` (0.02 GB) | `vae_approx` | Kijai/MiniMax-H3-TAE | Yes (Apache-2.0) |
+| Background removal | `BiRefNet-general` (0.9 GB, + its code and config) for the reference picture | `RMBG/BiRefNet` | 1038lab/BiRefNet | Yes (BiRefNet: MIT) |
+
+Workflows (workflow list, from the repo revision checked with this script; the model names are set to the files above):
+
+| Workflow | Use |
+|---|---|
+| `minimax_h3_character_swap_workflow_native_nodes_v1.1` | One clip (up to ~15 s, `17n + 5` frames at 24 fps). Load the guide video and one reference picture; the VLM writes the prompt |
+| `minimax_h3_character_swap_workflow_v1.1` | BFS Shot Planner: splits a long video into shots, renders each and joins them |
+| `minimax_h3_motion_transfer_workflow_native_nodes_v1.0` / `..._planner_v1.0` | Motion Transfer with 1–4 pictures (pictures 2–4 start disabled: select their nodes, Ctrl+B) |
+
+Tips from the LoRA author: one reference picture per run, a clear full-body picture works best for clothes; if the
+guide video has several people, name the one to replace; start with a short test clip. Results drift with small
+faces, occlusion, fast motion and long clips. Both workflows end with an optional second pass (LMS LoRA + latent
+upscaler). Use guide videos and reference pictures only with the consent of the people in them.
+
+Custom nodes added for `h3swap`: ComfyUI-BFSNodes, ComfyUI-RMBG (only BiRefNet's dependencies are installed, so
+its other nodes fail to import; the log shows those errors) and Comfyui_Minimax_h3_latent_Upscaler. The run
+ends `FAILED` if the image's ComfyUI is older than 0.39.2, which these workflows need.
+
+## Adding LoRAs
+
+Extra LoRAs, for any model set, without changing the script:
+- When renting: set `DONUT_EXTRA_LORAS` in the template env (comma-separated). They download with the other files,
+  and a failed one makes the run end `FAILED`.
+- On a running instance (Jupyter terminal or SSH): `bash /workspace/donut_add.sh <source> [folder]`, then press
+  `R` in ComfyUI (or reload the page) so the new file shows in the LoRA lists. `folder` is a folder under
+  `models/` (default `loras`).
+
+| Source | Example |
+|---|---|
+| `hf:<owner>/<repo>/<path in repo>` | `hf:Alissonerdx/Minimax-H3-ComfyUI/loras/minimax_h3_live_wallpaper_v1.0_ref2va_r32.safetensors` |
+| `civitai:<model version id>` (needs `CIVITAI_TOKEN`) | `civitai:2944022` (the version id is in the model page URL, `?modelVersionId=`) |
+| A direct `https://` link | `https://huggingface.co/<repo>/resolve/main/<file>` (sends `HF_TOKEN` or `CIVITAI_TOKEN` to those two sites) |
+
+A file that is already there is skipped. A LoRA must match the model set: LTX-2.3 LoRAs do not load on H3 and the
+reverse.
+
 ## Custom nodes
 
 ComfyUI-KJNodes and ComfyUI-VideoHelperSuite for every model set; ComfyUI-LTXVideo for `ltx25` and `ltx23`;
-ComfyUI-BFSNodes when `DONUT_LORAS` includes `motion-transfer`; ComfyUI-Licon-MSR when it includes `msr`
+ComfyUI-BFSNodes when `DONUT_LORAS` includes `motion-transfer` and for `h3swap`; ComfyUI-RMBG and
+Comfyui_Minimax_h3_latent_Upscaler for `h3swap`; ComfyUI-Licon-MSR when `DONUT_LORAS` includes `msr`
 (+ comfyui_controlnet_aux and ComfyUI-Video-Depth-Anything when `DONUT_UNION=1`).
 Each node is pinned to a commit in the script; update the hash there to move to a newer version.
 Their `requirements.txt` are installed with the image's torch/torchvision/torchaudio versions as constraints,
@@ -165,8 +225,10 @@ so the image's CUDA build of torch is never replaced.
    Vast → Settings → Environment Variables add `HF_TOKEN` (a **read-only** token). For Civitai LoRAs add
    `CIVITAI_TOKEN` there too. Never put a token in this repo or in the template itself.
 2. Template: image `vastai/comfy:v0.42.1-cuda-12.9-py312`, disk ≥ 100 GB (≥ 120 GB for `ltx23` with `DONUT_LORAS=all` or `h3` with `DONUT_H3_R2V=1`), env
-   `PROVISIONING_SCRIPT=<raw URL of provision_donut.sh>`, optionally `DONUT_MODEL=ltx23|ltx25|h3` (default `ltx23`)
-   and `DONUT_LORAS=...`.
+   `PROVISIONING_SCRIPT=<raw URL of provision_donut.sh>`, optionally `DONUT_MODEL=ltx23|ltx25|h3|h3swap` (default
+   `ltx23`), `DONUT_LORAS=...` and `DONUT_EXTRA_LORAS=...`. Keep one template per model set (for example
+   "Donut LTX-2.3" and "Donut H3 Swap"), each with its own `DONUT_MODEL`: picking the template picks the models,
+   since editing env on Vast saves a new template.
 3. Rent an instance. ComfyUI stays on "Loading" until provisioning ends.
    Progress: Instance Portal → Instance Logs (`ok <file>` / `FAIL <file>` lines),
    or `/workspace/donut_provision.log`. Short step-by-step status: `/workspace/donut_status.txt`
@@ -197,6 +259,8 @@ In a snapshot of RTX 4090 offers (2026-10-29), 35 of 43 could run the `cuda-12.9
   and ~126 s for FLF2V. A 10 s run uses ~40 GB of host RAM, so prefer hosts with ≥ 96 GB RAM for 10 s clips.
 - `h3`: start with 5 s clips at ~768×512 and the 8-step turbo LoRA, then raise resolution/length while
   watching VRAM. Do not install `ComfyUI-MiniMaxH3-Cache`.
+- `h3swap`: the H3 model (21 GB), its text encoder (15.7 GB) and the prompt-writing VLM (7.3 GB) take turns in
+  VRAM, so pick hosts with ≥ 96 GB RAM. Not measured on a 4090 yet; start with a 4–5 s clip at ~0.4–0.6 MP.
 
 ## MiniMax H3 license
 
@@ -205,6 +269,7 @@ the United Kingdom, South Korea and the United States. The text does not say whe
 where the model runs or where users are, so the cautious reading is all three: rent `h3` hosts outside those
 territories, or get a separate license from MiniMax. Commercial products above $20M yearly revenue need prior
 written permission, and products must show "MiniMax H3" in their UI. Read the full license before use.
+This applies to `h3swap` too; its LoRAs add their own terms (see the `h3swap` table).
 
 ## Known issues / notes
 
