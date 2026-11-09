@@ -12,7 +12,10 @@
 #   h3     MiniMax H3 T2V/I2V (pruned int8). No token needed. DONUT_H3_R2V=1 adds reference-to-video.
 #   h3swap MiniMax H3 Ref2VA with the BFS Character Swap v1.1 and Motion Transfer LoRAs and their workflows:
 #          replace the person in a video with the person (face, hair, clothes) in a reference image.
+#          Also installs the qwenedit set below (to build the full-body reference picture).
 #          No token needed. Check the MiniMax H3 license territory rules before renting a host (see README).
+#   qwenedit Qwen-Image-Edit 2511 (int8) only, for ComfyUI's "Qwen Image Edit 2511 Int8" template: up to 3
+#          pictures (a person, an outfit...) + a prompt -> a new picture. ~31 GB, no token needed.
 # Optional: DONUT_UNION=1 also installs Union Control preprocessors (depth / pose / canny).
 # Optional: DONUT_EXTRA_LORAS="hf:<owner>/<repo>/<file>,civitai:<version id>,https://..." downloads more LoRAs
 #           into models/loras for any model set. On a running instance: bash /workspace/donut_add.sh <same source>.
@@ -27,8 +30,8 @@ rm -f /workspace/.donut_ready
 DONUT_MODEL=${DONUT_MODEL:-ltx23}
 status "start model=$DONUT_MODEL gpu=$(nvidia-smi --query-gpu=name,memory.total --format=csv,noheader 2>/dev/null | head -1)"
 case "$DONUT_MODEL" in
-  ltx25|ltx23|h3|h3swap) ;;
-  *) status "FAILED: unknown DONUT_MODEL=$DONUT_MODEL (use ltx25, ltx23, h3 or h3swap)"; exit 1 ;;
+  ltx25|ltx23|h3|h3swap|qwenedit) ;;
+  *) status "FAILED: unknown DONUT_MODEL=$DONUT_MODEL (use ltx25, ltx23, h3, h3swap or qwenedit)"; exit 1 ;;
 esac
 
 # the base image syncs ComfyUI into /workspace on first boot and runs it from there; wait for it.
@@ -207,6 +210,16 @@ fi
 
 DL0=$(date +%s)
 PIDS=()
+# Qwen-Image-Edit 2511 int8 (~31 GB): the files of ComfyUI's "Qwen Image Edit 2511 Int8" template, plus the
+# 8-step Lightning LoRA as a middle ground between its 4-step LoRA and the full 20-40 steps
+qwen_edit_get() {
+  get Comfy-Org/Qwen-Image-Edit_ComfyUI split_files/diffusion_models/qwen_image_edit_2511_int8_convrot.safetensors $M/diffusion_models & PIDS+=($!)
+  get Comfy-Org/HunyuanVideo_1.5_repackaged split_files/text_encoders/qwen_2.5_vl_7b_fp8_scaled.safetensors $M/text_encoders & PIDS+=($!)
+  get Comfy-Org/Qwen-Image_ComfyUI split_files/vae/qwen_image_vae.safetensors $M/vae & PIDS+=($!)
+  for s in 4 8; do
+    get lightx2v/Qwen-Image-Edit-2511-Lightning Qwen-Image-Edit-2511-Lightning-${s}steps-V1.0-bf16.safetensors $M/loras & PIDS+=($!)
+  done
+}
 case "$DONUT_MODEL" in
 ltx25)  # ~42 GB, gated
   R=Lightricks/LTX-2.5
@@ -249,7 +262,7 @@ h3)  # ~44 GB (+23 GB with DONUT_H3_R2V=1); files of ComfyUI's MiniMax H3 templa
     get $H loras/minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors $M/loras & PIDS+=($!)
   fi
   ;;
-h3swap)  # ~55 GB; the models of the BFS Character Swap v1.1 and Motion Transfer v1.0 workflows (Alissonerdx)
+h3swap)  # ~86 GB (incl. qwenedit); the models of the BFS Character Swap v1.1 and Motion Transfer v1.0 workflows (Alissonerdx)
   H=Comfy-Org/MiniMax-H3; A=Alissonerdx/Minimax-H3-ComfyUI
   get $H diffusion_models/minimax_h3_ref2va_pruned_int8_convrot.safetensors $M/diffusion_models & PIDS+=($!)
   get $H text_encoders/qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors $M/text_encoders & PIDS+=($!)
@@ -269,6 +282,10 @@ h3swap)  # ~55 GB; the models of the BFS Character Swap v1.1 and Motion Transfer
   for f in BiRefNet-general.safetensors birefnet.py BiRefNet_config.py config.json; do
     get 1038lab/BiRefNet $f $M/RMBG/BiRefNet & PIDS+=($!)
   done
+  qwen_edit_get
+  ;;
+qwenedit)
+  qwen_edit_get
   ;;
 esac
 for s in $EXTRA; do bash $ADD "$s" & PIDS+=($!); done
@@ -314,7 +331,9 @@ if [ "$DONUT_MODEL" = h3swap ]; then
   # only the BiRefNet node is used; its full requirements (GroundingDINO, SAM, onnxruntime...) are skipped,
   # and the pack loads each of its node files on its own, so the unused ones just fail to import
   add_node https://github.com/1038lab/ComfyUI-RMBG.git a66a5e641a54988d80ed6aad18946081c85f309e "timm einops kornia"
-  add_node https://github.com/LBH-123-AI/Comfyui_Minimax_h3_latent_Upscaler.git 40316cf008b2fd8663263270669eb4da23f89d2c
+  # the commit the BFS workflows were saved with: later commits added a widget, which shifts the saved values
+  # ("device: 'fp16' not in list") and drops the workflows' video outputs at validation
+  add_node https://github.com/LBH-123-AI/Comfyui_Minimax_h3_latent_Upscaler.git 6a4b191e8af583b7c097f564690325f91d18c2e2
 fi
 # the Multiple-Subject-Reference LoRA reads a reference video built by the Licon MSR node
 # (up to 4 subject images + a background image)
@@ -456,6 +475,15 @@ if [ -s "$WF" ]; then
 fi
 if [ ${#H3WF[@]} -gt 0 ]; then
   python $WFPY check $M "${H3WF[@]}" || FAILS=$((FAILS+1))
+fi
+# the bundled Qwen Image Edit 2511 Int8 template must find every model it loads
+if [ "$DONUT_MODEL" = h3swap ] || [ "$DONUT_MODEL" = qwenedit ]; then
+  QT=$(python -c 'import importlib.util, os; s = importlib.util.find_spec("comfyui_workflow_templates_json"); print(os.path.join(os.path.dirname(s.origin), "templates", "image_qwen_image_edit_2511_int8.json"))' 2>/dev/null)
+  if [ -s "$QT" ]; then
+    python $WFPY check $M "$QT" || FAILS=$((FAILS+1))
+  else
+    echo "FAIL template image_qwen_image_edit_2511_int8.json not found"; FAILS=$((FAILS+1))
+  fi
 fi
 
 # ComfyUI is held until provisioning finishes, so it starts with the new nodes/models; no restart needed

@@ -11,7 +11,8 @@ Provisioning script for a Vast.ai instance running the `vastai/comfy:v0.42.1` im
 | `ltx23` (default) | LTX-2.3 text/image-to-video, first-last-frame and IC-LoRA Union Control, fp8, plus the video-to-video LoRAs picked with `DONUT_LORAS` | ~74 GB + LoRAs | Only for gated LoRAs |
 | `ltx25` | LTX-2.5 video-to-video with IC-LoRAs (Layout-to-Render, Union Control), int8 | ~42 GB | Required (gated) |
 | `h3` | MiniMax H3 text/image-to-video with audio, pruned int8 | ~44 GB (+23 GB with `DONUT_H3_R2V=1`) | Not needed |
-| `h3swap` | MiniMax H3 reference-to-video with the Character Swap and Motion Transfer LoRAs: replace the person in a video with the person in a reference image | ~55 GB | Not needed |
+| `h3swap` | MiniMax H3 reference-to-video with the Character Swap and Motion Transfer LoRAs: replace the person in a video with the person in a reference image. Includes `qwenedit` | ~86 GB | Not needed |
+| `qwenedit` | Qwen-Image-Edit 2511 only: up to 3 pictures (person, outfit, setting) + a prompt → a new picture | ~31 GB | Not needed |
 
 Any model set can also download extra LoRAs, see [Adding LoRAs](#adding-loras).
 
@@ -190,6 +191,34 @@ upscaler). Use guide videos and reference pictures only with the consent of the 
 Custom nodes added for `h3swap`: ComfyUI-BFSNodes, ComfyUI-RMBG (only BiRefNet's dependencies are installed, so
 its other nodes fail to import; the log shows those errors) and Comfyui_Minimax_h3_latent_Upscaler. The run
 ends `FAILED` if the image's ComfyUI is older than 0.39.2, which these workflows need.
+`h3swap` also installs the `qwenedit` files below, to build the full-body reference picture (a face picture + an
+outfit picture → the person wearing the outfit) that Character Swap needs.
+
+### `qwenedit`
+
+The files of ComfyUI's bundled **Qwen Image Edit 2511 Int8** template (Template Library → search `2511`), all
+Apache-2.0, plus the 8-step Lightning LoRA. The script checks that the template finds every model it loads.
+
+| Type | File | Folder | Source repo |
+|---|---|---|---|
+| Diffusion model | `qwen_image_edit_2511_int8_convrot` (20.5 GB) | `diffusion_models` | Comfy-Org/Qwen-Image-Edit_ComfyUI |
+| Text encoder | `qwen_2.5_vl_7b_fp8_scaled` (9.4 GB) | `text_encoders` | Comfy-Org/HunyuanVideo_1.5_repackaged |
+| VAE | `qwen_image_vae` (0.25 GB) | `vae` | Comfy-Org/Qwen-Image_ComfyUI |
+| LoRA | `Qwen-Image-Edit-2511-Lightning-4steps-V1.0-bf16`, `...-8steps-V1.0-bf16` (0.85 GB each) | `loras` | lightx2v/Qwen-Image-Edit-2511-Lightning |
+
+Use: the template loads one picture; for a second or third one add a **Load Image** node and connect it to the
+`image2` / `image3` input of the *Image Edit (Qwen-Image 2511 Int8)* node. Refer to them in the prompt as
+"Picture 1", "Picture 2". The output takes the size of Picture 1. Measured on an RTX 4090 at 832×1248 with two
+input pictures (2026-11-09):
+
+| Mode | Settings | Time per picture |
+|---|---|---|
+| Draft | *Enable 4steps LoRA?* = true (4 steps, CFG 1) | ~19 s |
+| Standard | LoRA off, Steps 20, CFG 4 | ~180 s |
+| Best | LoRA off, Steps 40, CFG 4 (template default) | ~357 s |
+
+The 40-step pictures kept the face closest to the reference. The 20 GB model nearly fills 24 GB, so part of it is
+streamed from RAM each step.
 
 ## Adding LoRAs
 
@@ -224,8 +253,8 @@ so the image's CUDA build of torch is never replaced.
 1. For `ltx25` or gated `ltx23` LoRAs: accept the licenses of those Lightricks repos on Hugging Face, and in
    Vast → Settings → Environment Variables add `HF_TOKEN` (a **read-only** token). For Civitai LoRAs add
    `CIVITAI_TOKEN` there too. Never put a token in this repo or in the template itself.
-2. Template: image `vastai/comfy:v0.42.1-cuda-12.9-py312`, disk ≥ 100 GB (≥ 120 GB for `ltx23` with `DONUT_LORAS=all` or `h3` with `DONUT_H3_R2V=1`), env
-   `PROVISIONING_SCRIPT=<raw URL of provision_donut.sh>`, optionally `DONUT_MODEL=ltx23|ltx25|h3|h3swap` (default
+2. Template: image `vastai/comfy:v0.42.1-cuda-12.9-py312`, disk ≥ 100 GB (≥ 120 GB for `ltx23` with `DONUT_LORAS=all` or `h3` with `DONUT_H3_R2V=1`, ≥ 130 GB for `h3swap`, ≥ 70 GB for `qwenedit`), env
+   `PROVISIONING_SCRIPT=<raw URL of provision_donut.sh>`, optionally `DONUT_MODEL=ltx23|ltx25|h3|h3swap|qwenedit` (default
    `ltx23`), `DONUT_LORAS=...` and `DONUT_EXTRA_LORAS=...`. Keep one template per model set (for example
    "Donut LTX-2.3" and "Donut H3 Swap"), each with its own `DONUT_MODEL`: picking the template picks the models,
    since editing env on Vast saves a new template.
