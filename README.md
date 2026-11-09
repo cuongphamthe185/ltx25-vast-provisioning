@@ -206,10 +206,19 @@ Apache-2.0, plus the 8-step Lightning LoRA. The script checks that the template 
 | VAE | `qwen_image_vae` (0.25 GB) | `vae` | Comfy-Org/Qwen-Image_ComfyUI |
 | LoRA | `Qwen-Image-Edit-2511-Lightning-4steps-V1.0-bf16`, `...-8steps-V1.0-bf16` (0.85 GB each) | `loras` | lightx2v/Qwen-Image-Edit-2511-Lightning |
 
-Use: the template loads one picture; for a second or third one add a **Load Image** node and connect it to the
-`image2` / `image3` input of the *Image Edit (Qwen-Image 2511 Int8)* node. Refer to them in the prompt as
-"Picture 1", "Picture 2". The output takes the size of Picture 1. Measured on an RTX 4090 at 832×1248 with two
-input pictures (2026-11-09):
+**App `Donut_Anh`** (Apps sidebar, ComfyUI App Mode): a person picture + an outfit picture + a prompt → full-body
+pictures, as a form with no node graph. Fields: *Ảnh 1 – Người*, *Ảnh 2 – Quần áo*, *Yêu cầu* (English prompt, filled
+with a full-body fashion template that keeps the face of Picture 1 and the outfit of Picture 2), *Nháp nhanh*
+(4-step Lightning LoRA), *Số bước* (20–40 when draft is off), *Khung ảnh* (aspect ratio, 1 MP), and App Mode's own
+*Number of runs* (one picture per run, new seed each run). Upload the two pictures with the folder button of each
+field. The app is [apps/Donut_Anh.app.json](apps/Donut_Anh.app.json); the script fetches it from the same commit as
+itself (so `PROVISIONING_SCRIPT` must be this script's raw URL) and checks its models. It is the bundled template,
+unpacked, with an empty latent of the chosen size instead of Picture 1's size (MIT, Comfy-Org/workflow_templates).
+
+Without the app: the template loads one picture; for a second or third one add a **Load Image** node and connect it
+to the `image2` / `image3` input of the *Image Edit (Qwen-Image 2511 Int8)* node. Refer to them in the prompt as
+"Picture 1", "Picture 2". The template's output takes the size of Picture 1. Measured on an RTX 4090 at 832×1248
+with two input pictures (2026-11-09):
 
 | Mode | Settings | Time per picture |
 |---|---|---|

@@ -457,6 +457,20 @@ if [ "$DONUT_MODEL" = h3swap ]; then
   done
 fi
 
+# ---- apps (ComfyUI App Mode forms, Apps sidebar): kept in this repo's apps/ folder and fetched from the same
+# commit as this script, so a template pinned to a commit also pins its apps ----
+APPS=()
+if [ "$DONUT_MODEL" = h3swap ] || [ "$DONUT_MODEL" = qwenedit ]; then
+  for a in Donut_Anh.app.json; do
+    if [ -n "${PROVISIONING_SCRIPT:-}" ] \
+     && curl -fsSL --retry 3 --connect-timeout 30 -o "$COMFY/user/default/workflows/$a" "${PROVISIONING_SCRIPT%/*}/apps/$a"; then
+      echo "app $a"; APPS+=("$COMFY/user/default/workflows/$a")
+    else
+      echo "FAIL app $a (PROVISIONING_SCRIPT must be the raw URL of this script)"; FAILS=$((FAILS+1))
+    fi
+  done
+fi
+
 status "waiting for model downloads"
 for p in "${PIDS[@]}"; do   # only the downloads; a bare wait would also wait on the tee log process and hang
   wait "$p" || FAILS=$((FAILS+1))
@@ -480,7 +494,7 @@ fi
 if [ "$DONUT_MODEL" = h3swap ] || [ "$DONUT_MODEL" = qwenedit ]; then
   QT=$(python -c 'import importlib.util, os; s = importlib.util.find_spec("comfyui_workflow_templates_json"); print(os.path.join(os.path.dirname(s.origin), "templates", "image_qwen_image_edit_2511_int8.json"))' 2>/dev/null)
   if [ -s "$QT" ]; then
-    python $WFPY check $M "$QT" || FAILS=$((FAILS+1))
+    python $WFPY check $M "$QT" "${APPS[@]}" || FAILS=$((FAILS+1))
   else
     echo "FAIL template image_qwen_image_edit_2511_int8.json not found"; FAILS=$((FAILS+1))
   fi
