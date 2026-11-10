@@ -13,6 +13,7 @@ Provisioning script for a Vast.ai instance running the `vastai/comfy:v0.42.1` im
 | `h3` | MiniMax H3 text/image-to-video with audio, pruned int8 | ~44 GB (+23 GB with `DONUT_H3_R2V=1`) | Not needed |
 | `h3swap` | MiniMax H3 reference-to-video with the Character Swap and Motion Transfer LoRAs: replace the person in a video with the person in a reference image. Includes `qwenedit` | ~86 GB | Not needed |
 | `qwenedit` | Qwen-Image-Edit 2511 only: up to 3 pictures (person, outfit, setting) + a prompt → a new picture | ~31 GB | Not needed |
+| `qwen21` | Qwen-Image 2.1 text-to-image and editing (up to 10 reference pictures), base and Turbo, plus the Qwen-Image 2.1 LoRAs picked with `DONUT_LORAS`. **Non-commercial license** | ~44 GB + ~2.7 GB LoRAs | Not needed (`CIVITAI_TOKEN` for Civitai LoRAs) |
 
 Any model set can also download extra LoRAs, see [Adding LoRAs](#adding-loras).
 
@@ -55,7 +56,8 @@ The ID-LoRA, Ingredients and Style Transition templates need extra LoRAs: add th
 
 #### LoRAs (`DONUT_LORAS`)
 
-Comma-separated keys, `all` or `none`; default `motion-track`. Only used with `DONUT_MODEL=ltx23`.
+Comma-separated keys, `all` or `none`; default `motion-track`. The keys below are for `DONUT_MODEL=ltx23`
+(`qwen21` has its own keys, see [`qwen21`](#qwen21)).
 Files go to `models/loras`; bundled workflows go to the workflow list.
 - Gated keys need `HF_TOKEN` from an account that accepted the license on each repo page.
 - Civitai keys need `CIVITAI_TOKEN` (civitai.com → Account settings → API keys), set in the Vast account env like
@@ -229,6 +231,60 @@ with two input pictures (2026-11-09):
 The 40-step pictures kept the face closest to the reference. The 20 GB model nearly fills 24 GB, so part of it is
 streamed from RAM each step.
 
+### `qwen21`
+
+[Qwen-Image 2.1](https://huggingface.co/Qwen/Qwen-Image-2.1) (Sep 2026) is one 7B model for both text-to-image and
+editing: up to 10 reference pictures, native 2K (2048×2048), transparent (RGBA) pictures, edits marked with circles or
+masks. It is a new architecture: Qwen-Image / Qwen-Image-Edit 2509 / 2511 LoRAs do not load on it, and the reverse.
+**License: Qwen Research License, non-commercial (research or evaluation) use only**, whatever the LoRA licenses
+below say; commercial use needs a separate license from Qwen. `qwenedit` (Apache-2.0) stays the choice for
+commercial work.
+
+The files of ComfyUI's five bundled Qwen Image 2.1 templates (Template Library → search `Qwen Image 2.1`: Text to
+Image, Image Edit, their Turbo copies, Remove Background), all from Comfy-Org/Qwen-Image-2.1. The script checks that
+every template finds the models it loads, and that ComfyUI has the Qwen-Image 2.1 nodes (ComfyUI 0.42.1 does).
+
+| Type | File | Folder |
+|---|---|---|
+| Diffusion model (base, 20–40 steps) | `qwen_image_2.1_int8_convrot` (7.3 GB) | `diffusion_models` |
+| Diffusion model (Turbo, 8 steps, CFG 1) | `qwen_image_2.1_turbo_int8_convrot` (7.3 GB) | `diffusion_models` |
+| Text encoder | `qwen3vl_8b_int8_convrot` (9.4 GB) | `text_encoders` |
+| Prompt enhancers (Qwen3.5 9B, the templates' enhance-prompt switch) | `qwen3.5_9b_qwen_image_2.1_pe_t2i.int8_convrot`, `..._pe_i2i.int8_convrot` (9.5 GB each) | `text_encoders` |
+| VAE | `qwen_image_2.1_vae_bf16` (0.7 GB) | `vae` |
+
+#### Qwen-Image 2.1 LoRAs (`DONUT_LORAS`)
+
+Comma-separated keys, `all` or `none`; **default `all`** (~2.7 GB). Picked from the most downloaded Qwen-Image 2.1
+LoRAs on Civitai and Hugging Face (2026-11-10); the Hugging Face files were checked to be in ComfyUI's LoRA format.
+Load them with a **LoraLoaderModelOnly** after the diffusion model (inside the template's subgraph, or in the
+unpacked graph). Edit LoRAs go in the Image Edit templates, look LoRAs in Text to Image. Civitai keys need
+`CIVITAI_TOKEN`. "Output use" is the LoRA's own license or Civitai permission; the base model keeps every output
+non-commercial anyway.
+
+| Key | What it does / how to prompt | Size | Source | Output use |
+|---|---|---|---|---|
+| `qma` | Camera angle of an existing picture: `<qma> {azimuth} {elevation} {distance}`, e.g. `<qma> right side view eye-level shot medium shot`. Strength 1.0, base model, 30 steps, CFG 3, ~1 MP. Node for picking the angle by dragging: QMA-Multi-Angle-Lora-Node (not installed) | 0.32 GB | gribbliest (HF) | Apache-2.0 |
+| `anyangle` | Exact camera angle: picture 2 = original, picture 1 = a rough render at the wanted angle (Blender, 3D model, splat). Prompt `Change the camera angle from <image2> to <image1>`, strength 1.0, CFG 3, ≥ 20 steps | 0.12 GB | lilylilith (HF) | Apache-2.0 |
+| `vertical-angle` | High / low angle of the same scene: `change <image1> to show scene viewed from top , high angle view` (or `from below , low angle view`) | 0.08 GB | Civitai | Yes |
+| `next-scene` | Next shot of a storyboard from one picture: prompt starts `Next Scene:` + the camera move (`Next Scene: The camera pulls back to a wide shot…`). Strength 0.7–0.9 | 0.34 GB | akhaliq (HF) | Apache-2.0 |
+| `cinematic` | Cinematic photography and lighting for text-to-image | 0.25 GB | Civitai | Yes |
+| `filmstills` | Movie-still look | 0.08 GB | Danrisi (HF) | Non-commercial (Qwen Research) |
+| `lenovo` | UltraReal: candid, realistic photo look (the most downloaded Qwen-Image 2.1 LoRA) | 0.08 GB | Danrisi (HF) | Non-commercial (Qwen Research) |
+| `nicegirls` | UltraReal portraits of women, natural skin | 0.08 GB | Danrisi (HF) | Unclear (license "other") |
+| `asian-mix` | Asian faces and features. Trigger `asian woman` | 0.32 GB | Civitai | Yes |
+| `detail-fix` | Restores detail and sharpness Qwen-Image 2.1 loses | 0.06 GB | e-n-v-y (HF) | Yes (Civitai permissions) |
+| `bfs-head` | Head swap: base picture + head picture → the base picture with that head (pose, light, background kept). Installs the workflow `Head Swap V1 Qwen 2.1 Workflow` (8-step LoRA `p_q_image_2.1_8_steps_v0.1_comfyui_bf16`, deis sampler) and rgthree-comfy | 0.26 + 0.34 GB | Alissonerdx (HF) | MIT; only with the consent of the people shown |
+| `outfit-swap` | Person picture + outfit picture → the person wearing the outfit | 0.15 GB | Civitai | No |
+| `consistency` | Keeps the unedited parts of a picture unchanged during edits (2.1 tends to shift colors and detail everywhere) | 0.15 GB | Civitai | No |
+| `breasts-slider` | Body-proportion slider: strength +1…+20 with `large breasts`, −1…−20 with `small breasts` (adult-content creator) | 0.003 GB | Civitai | No (non-commercial, no redistribution) |
+
+No dedicated relight LoRA exists for Qwen-Image 2.1 yet: the base model relights from the prompt in the Image Edit
+templates (the Turbo Image Edit template's sample prompt is a relight). The Natural-Exposure LoRA was left out
+because its file is in PEFT format (`lora_A.default`), which ComfyUI may not load.
+
+Not measured on an RTX 4090 yet. The 7.3 GB int8 model fits in VRAM with room for 2K pictures; the text encoder
+and the prompt enhancer take turns in VRAM, so ≥ 64 GB host RAM is enough.
+
 ## Adding LoRAs
 
 Extra LoRAs, for any model set, without changing the script:
@@ -245,13 +301,20 @@ Extra LoRAs, for any model set, without changing the script:
 | A direct `https://` link | `https://huggingface.co/<repo>/resolve/main/<file>` (sends `HF_TOKEN` or `CIVITAI_TOKEN` to those two sites) |
 
 A file that is already there is skipped. A LoRA must match the model set: LTX-2.3 LoRAs do not load on H3 and the
-reverse.
+reverse; Qwen-Image-Edit 2511 LoRAs do not load on `qwen21` and the reverse (check the base model on the LoRA page:
+"Qwen 2.1" = `qwen21`).
+
+Civitai models shown only on **civitai.red** (Civitai's site for mature content) use the same ids, the same API and
+the same `CIVITAI_TOKEN` as civitai.com: take the version id from the civitai.red URL (`?modelVersionId=`) and use
+`civitai:<id>`. Such pages and downloads need a Civitai account (18+) with mature content enabled in its settings;
+generate the API key on that account.
 
 ## Custom nodes
 
 ComfyUI-KJNodes and ComfyUI-VideoHelperSuite for every model set; ComfyUI-LTXVideo for `ltx25` and `ltx23`;
 ComfyUI-BFSNodes when `DONUT_LORAS` includes `motion-transfer` and for `h3swap`; ComfyUI-RMBG and
-Comfyui_Minimax_h3_latent_Upscaler for `h3swap`; ComfyUI-Licon-MSR when `DONUT_LORAS` includes `msr`
+Comfyui_Minimax_h3_latent_Upscaler for `h3swap`; ComfyUI-Licon-MSR when `DONUT_LORAS` includes `msr`;
+rgthree-comfy for `qwen21` with `bfs-head`
 (+ comfyui_controlnet_aux and ComfyUI-Video-Depth-Anything when `DONUT_UNION=1`).
 Each node is pinned to a commit in the script; update the hash there to move to a newer version.
 Their `requirements.txt` are installed with the image's torch/torchvision/torchaudio versions as constraints,
@@ -262,8 +325,8 @@ so the image's CUDA build of torch is never replaced.
 1. For `ltx25` or gated `ltx23` LoRAs: accept the licenses of those Lightricks repos on Hugging Face, and in
    Vast → Settings → Environment Variables add `HF_TOKEN` (a **read-only** token). For Civitai LoRAs add
    `CIVITAI_TOKEN` there too. Never put a token in this repo or in the template itself.
-2. Template: image `vastai/comfy:v0.42.1-cuda-12.9-py312`, disk ≥ 100 GB (≥ 120 GB for `ltx23` with `DONUT_LORAS=all` or `h3` with `DONUT_H3_R2V=1`, ≥ 130 GB for `h3swap`, ≥ 70 GB for `qwenedit`), env
-   `PROVISIONING_SCRIPT=<raw URL of provision_donut.sh>`, optionally `DONUT_MODEL=ltx23|ltx25|h3|h3swap|qwenedit` (default
+2. Template: image `vastai/comfy:v0.42.1-cuda-12.9-py312`, disk ≥ 100 GB (≥ 120 GB for `ltx23` with `DONUT_LORAS=all` or `h3` with `DONUT_H3_R2V=1`, ≥ 130 GB for `h3swap`, ≥ 70 GB for `qwenedit`, ≥ 80 GB for `qwen21`), env
+   `PROVISIONING_SCRIPT=<raw URL of provision_donut.sh>`, optionally `DONUT_MODEL=ltx23|ltx25|h3|h3swap|qwenedit|qwen21` (default
    `ltx23`), `DONUT_LORAS=...` and `DONUT_EXTRA_LORAS=...`. Keep one template per model set (for example
    "Donut LTX-2.3" and "Donut H3 Swap"), each with its own `DONUT_MODEL`: picking the template picks the models,
    since editing env on Vast saves a new template.
@@ -299,6 +362,9 @@ In a snapshot of RTX 4090 offers (2026-10-29), 35 of 43 could run the `cuda-12.9
   watching VRAM. Do not install `ComfyUI-MiniMaxH3-Cache`.
 - `h3swap`: the H3 model (21 GB), its text encoder (15.7 GB) and the prompt-writing VLM (7.3 GB) take turns in
   VRAM, so pick hosts with ≥ 96 GB RAM. Not measured on a 4090 yet; start with a 4–5 s clip at ~0.4–0.6 MP.
+- `qwen21`: the lightest set. The 7.3 GB int8 model stays in VRAM (the 2511 model of `qwenedit` does not);
+  the 9.4 GB text encoder and the 9.5 GB prompt enhancer are swapped in and out. Not measured yet; start with the
+  Turbo templates at 1 MP, then 2K.
 
 ## MiniMax H3 license
 

@@ -16,6 +16,10 @@
 #          No token needed. Check the MiniMax H3 license territory rules before renting a host (see README).
 #   qwenedit Qwen-Image-Edit 2511 (int8) only, for ComfyUI's "Qwen Image Edit 2511 Int8" template: up to 3
 #          pictures (a person, an outfit...) + a prompt -> a new picture. ~31 GB, no token needed.
+#   qwen21 Qwen-Image 2.1 (int8): text-to-image and editing with up to 10 reference pictures, the files of
+#          ComfyUI's five Qwen Image 2.1 templates (base and Turbo), ~44 GB + LoRAs. DONUT_LORAS picks
+#          Qwen-Image 2.1 LoRAs (see qwen21_lora below; default all, needs CIVITAI_TOKEN).
+#          Qwen Research License: non-commercial use only.
 # Optional: DONUT_UNION=1 also installs Union Control preprocessors (depth / pose / canny).
 # Optional: DONUT_EXTRA_LORAS="hf:<owner>/<repo>/<file>,civitai:<version id>,https://..." downloads more LoRAs
 #           into models/loras for any model set. On a running instance: bash /workspace/donut_add.sh <same source>.
@@ -30,8 +34,8 @@ rm -f /workspace/.donut_ready
 DONUT_MODEL=${DONUT_MODEL:-ltx23}
 status "start model=$DONUT_MODEL gpu=$(nvidia-smi --query-gpu=name,memory.total --format=csv,noheader 2>/dev/null | head -1)"
 case "$DONUT_MODEL" in
-  ltx25|ltx23|h3|h3swap|qwenedit) ;;
-  *) status "FAILED: unknown DONUT_MODEL=$DONUT_MODEL (use ltx25, ltx23, h3, h3swap or qwenedit)"; exit 1 ;;
+  ltx25|ltx23|h3|h3swap|qwenedit|qwen21) ;;
+  *) status "FAILED: unknown DONUT_MODEL=$DONUT_MODEL (use ltx25, ltx23, h3, h3swap, qwenedit or qwen21)"; exit 1 ;;
 esac
 
 # the base image syncs ComfyUI into /workspace on first boot and runs it from there; wait for it.
@@ -55,6 +59,10 @@ if [ "$DONUT_MODEL" = h3swap ]; then
   else
     echo "FAIL ComfyUI ${CV:-unknown} is older than 0.39.2 (h3swap workflows)"; FAILS=$((FAILS+1))
   fi
+fi
+# the Qwen Image 2.1 templates use the core nodes TextEncodeQwenImage21 and QwenImage21Cache (in ComfyUI 0.42.1)
+if [ "$DONUT_MODEL" = qwen21 ] && ! grep -q QwenImage21Cache $COMFY/comfy_extras/nodes_qwen.py 2>/dev/null; then
+  echo "FAIL this ComfyUI has no Qwen-Image 2.1 nodes (use the vastai/comfy:v0.42.1 image or newer)"; FAILS=$((FAILS+1))
 fi
 
 # keep the image's CUDA build of torch: custom node requirements must not up/downgrade it
@@ -143,8 +151,39 @@ ltx23_lora() { # key -> "repo file..." (a .json file is a workflow)
     *) return 1 ;;
   esac
 }
-LORAS=${DONUT_LORAS:-motion-track}
-[ "$LORAS" = all ] && LORAS=$LTX23_LORAS
+# qwen21 LoRAs selectable with DONUT_LORAS (default all). Qwen-Image 2.1 only: Qwen-Image-Edit 2509/2511 LoRAs
+# do not load on it (other architecture) and the reverse. Civitai keys need CIVITAI_TOKEN.
+QWEN21_LORAS="qma anyangle vertical-angle next-scene cinematic filmstills lenovo nicegirls asian-mix detail-fix
+  bfs-head outfit-swap consistency breasts-slider"
+qwen21_lora() { # key -> "repo file"
+  case "$1" in
+    # camera angle and next shot (edit an existing picture)
+    qma)            echo "gribbliest/qwen-image-2.1-qma-camera-angles qwen-image-2.1-qma-camera-angles.safetensors" ;;
+    anyangle)       echo "lilylilith/QI_2.1_AnyAngle QI2.1_AnyAngle.safetensors" ;;
+    vertical-angle) echo "civitai:3439657 qwen2.1-consistent_vertical_angle_change_v2.safetensors" ;;
+    next-scene)     echo "akhaliq/Qwen-Image-2.1-Next-Scene-LoRA next_scene_step2500.safetensors" ;;
+    # light and photo look
+    cinematic)      echo "civitai:3387119 cinematic_qwen21_2_c1-st5000.safetensors" ;;
+    filmstills)     echo "Danrisi/filmstills_qwen2.1 filmstills_qwen21.safetensors" ;;
+    # realistic people
+    lenovo)         echo "Danrisi/lenovo_qwen2.1 lenovo_qwen21.safetensors" ;;
+    nicegirls)      echo "Danrisi/nicegirls2_qwen2.1 nicegirls_v2_qwen21.safetensors" ;;
+    asian-mix)      echo "civitai:3374888 hina_QwenImage2.1_asianMix_Lora_v3.0-rank64.safetensors" ;;
+    detail-fix)     echo "e-n-v-y/Qwen-Image-2.1-Fix-v2.0 qwen2.1-detail-fix-2.0.safetensors" ;;
+    # editing tools: head swap (+ its workflow, see below), outfit swap, keep the unedited parts unchanged
+    bfs-head)       echo "Alissonerdx/BFS-Best-Face-Swap bfs_head_v1.1_qwen_2.1.safetensors" ;;
+    outfit-swap)    echo "civitai:3381922 qwen-image-2.1-outfit-swap.safetensors" ;;
+    consistency)    echo "civitai:3364470 qwen-image-2.1-consistency.safetensors" ;;
+    # body slider (adult-content creator, LoRA strength -20..+20)
+    breasts-slider) echo "civitai:3346363 Pornmaster_QI2.1_Breasts_Slider_V1.safetensors" ;;
+    *) return 1 ;;
+  esac
+}
+case "$DONUT_MODEL" in
+  qwen21) LSET=$QWEN21_LORAS; LORAS=${DONUT_LORAS:-all} ;;
+  *)      LSET=$LTX23_LORAS;  LORAS=${DONUT_LORAS:-motion-track} ;;
+esac
+[ "$LORAS" = all ] && LORAS=$LSET
 LORAS=${LORAS//,/ }
 LORAS=$(echo $LORAS)   # one space between keys, so the " key " checks below also match list ends and line breaks
 
@@ -220,6 +259,19 @@ qwen_edit_get() {
     get lightx2v/Qwen-Image-Edit-2511-Lightning Qwen-Image-Edit-2511-Lightning-${s}steps-V1.0-bf16.safetensors $M/loras & PIDS+=($!)
   done
 }
+get_loras() { # lookup function (ltx23_lora or qwen21_lora): download the DONUT_LORAS keys in $LORAS
+  local k src repo files p d
+  for k in $LORAS; do
+    [ "$k" = none ] && continue
+    src=$($1 "$k") || { echo "FAIL unknown lora $k (DONUT_LORAS)"; FAILS=$((FAILS+1)); continue; }
+    read -r repo files <<< "$src"
+    for p in $files; do
+      d=$M/loras; [[ $p == *.json ]] && d=$COMFY/user/default/workflows
+      if [[ $repo == civitai:* ]]; then civ "${repo#civitai:}" "$p" "$d" & PIDS+=($!)
+      else get "$repo" "$p" "$d" & PIDS+=($!); fi
+    done
+  done
+}
 case "$DONUT_MODEL" in
 ltx25)  # ~42 GB, gated
   R=Lightricks/LTX-2.5
@@ -239,16 +291,7 @@ ltx23)  # ~74 GB; files of ComfyUI's LTX-2.3 templates: T2V/I2V (dev + distilled
   get Comfy-Org/ltx-2 split_files/loras/gemma-3-12b-it-abliterated_lora_rank64_bf16.safetensors $M/loras & PIDS+=($!)
   get Lightricks/LTX-2.3-22b-IC-LoRA-Union-Control ltx-2.3-22b-ic-lora-union-control-ref0.5.safetensors $M/loras & PIDS+=($!)
   get Lightricks/LTX-2.3 ltx-2.3-spatial-upscaler-x2-1.1.safetensors $M/latent_upscale_models & PIDS+=($!)
-  for k in $LORAS; do
-    [ "$k" = none ] && continue
-    src=$(ltx23_lora "$k") || { echo "FAIL unknown lora $k (DONUT_LORAS)"; FAILS=$((FAILS+1)); continue; }
-    read -r repo files <<< "$src"
-    for p in $files; do
-      d=$M/loras; [[ $p == *.json ]] && d=$COMFY/user/default/workflows
-      if [[ $repo == civitai:* ]]; then civ "${repo#civitai:}" "$p" "$d" & PIDS+=($!)
-      else get "$repo" "$p" "$d" & PIDS+=($!); fi
-    done
-  done
+  get_loras ltx23_lora
   ;;
 h3)  # ~44 GB (+23 GB with DONUT_H3_R2V=1); files of ComfyUI's MiniMax H3 templates + turbo LoRAs
   H=Comfy-Org/MiniMax-H3
@@ -286,6 +329,20 @@ h3swap)  # ~86 GB (incl. qwenedit); the models of the BFS Character Swap v1.1 an
   ;;
 qwenedit)
   qwen_edit_get
+  ;;
+qwen21)  # ~44 GB; files of ComfyUI's Qwen Image 2.1 templates: Text to Image, Image Edit, their Turbo copies, Remove Background
+  Q=Comfy-Org/Qwen-Image-2.1
+  # the two Qwen3.5 9B files are the templates' prompt enhancers (T2I / I2I); their loaders are in the graphs either way
+  for f in diffusion_models/qwen_image_2.1_int8_convrot diffusion_models/qwen_image_2.1_turbo_int8_convrot \
+           text_encoders/qwen3vl_8b_int8_convrot vae/qwen_image_2.1_vae_bf16 \
+           text_encoders/qwen3.5_9b_qwen_image_2.1_pe_t2i.int8_convrot text_encoders/qwen3.5_9b_qwen_image_2.1_pe_i2i.int8_convrot; do
+    get $Q $f.safetensors $M/${f%%/*} & PIDS+=($!)
+  done
+  # the 8-step speed LoRA of the BFS head swap workflow
+  if [[ " $LORAS " == *" bfs-head "* ]]; then
+    get $Q loras/p_q_image_2.1_8_steps_v0.1_comfyui_bf16.safetensors $M/loras & PIDS+=($!)
+  fi
+  get_loras qwen21_lora
   ;;
 esac
 for s in $EXTRA; do bash $ADD "$s" & PIDS+=($!); done
@@ -339,6 +396,10 @@ fi
 # (up to 4 subject images + a background image)
 if [ "$DONUT_MODEL" = ltx23 ] && [[ " $LORAS " == *" msr "* ]]; then
   add_node https://github.com/liconstudio/ComfyUI-Licon-MSR.git 94a52bfec735ff6f802c480f7fe8fdac1d279a7f
+fi
+# the BFS head swap workflow (qwen21 bfs-head) shows its result in rgthree's Image Comparer node
+if [ "$DONUT_MODEL" = qwen21 ] && [[ " $LORAS " == *" bfs-head "* ]]; then
+  add_node https://github.com/rgthree/rgthree-comfy.git bc48c6aaeca87bedbc14245d89f9bc6be37a630e
 fi
 if [ "${DONUT_UNION:-0}" = "1" ]; then
   add_node https://github.com/Fannovel16/comfyui_controlnet_aux.git a587a4c1594524c1d2de5cd1a86cd868ff448e1c
@@ -408,8 +469,12 @@ fi
 WFPY=/workspace/.donut_wf.py
 cat > $WFPY <<'PY'
 import json, os, sys
-# the Motion Transfer planner loads the int8 H3 text encoder (25 GB); the nvfp4 one (15.7 GB) is downloaded instead
-RENAME = {"qwen3vl_32b_minimax_h3_int8_convrot.safetensors": "qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors"}
+# the Motion Transfer planner loads the int8 H3 text encoder (25 GB); the nvfp4 one (15.7 GB) is downloaded instead.
+# The BFS Qwen-Image 2.1 head swap workflow names PrunaAI's 8-step LoRA by the author's local file name, and
+# samples with deis_2m from the RES4LYF node pack: use the Comfy-Org file and the core deis sampler.
+RENAME = {"qwen3vl_32b_minimax_h3_int8_convrot.safetensors": "qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors",
+          "p_qwen_image_2.1_8step_v0.1.safetensors": "p_q_image_2.1_8_steps_v0.1_comfyui_bf16.safetensors"}
+SAMPLER = {"deis_2m": "deis"}
 def nodes(w):
     yield from w.get("nodes", [])
     for sg in w.get("definitions", {}).get("subgraphs", []):
@@ -429,6 +494,9 @@ if mode == "patch":  # src_dir out_dir name...
             for v, i in model_widgets(n, ("widgets_values", "widgets_values_named")):
                 b = v[i].replace("\\", "/").rsplit("/", 1)[-1]
                 v[i] = RENAME.get(b, b)
+            wv = n.get("widgets_values")
+            if n.get("type") in ("KSampler", "KSamplerAdvanced") and isinstance(wv, list):
+                n["widgets_values"] = [SAMPLER.get(x, x) if isinstance(x, str) else x for x in wv]
         json.dump(w, open(os.path.join(args[1], name), "w", encoding="utf-8"))
         print("workflow", name)
 else:  # check models_dir workflow...: every model an enabled node loads must be on disk
@@ -443,18 +511,29 @@ else:  # check models_dir workflow...: every model an enabled node loads must be
                     print(f"FAIL {os.path.basename(path)} needs missing model {v[i]}"); bad += 1
     sys.exit(1 if bad else 0)
 PY
-H3WF=()
+CHECKWF=()
 if [ "$DONUT_MODEL" = h3swap ]; then
   for w in minimax_h3_character_swap_workflow_native_nodes_v1.1 minimax_h3_character_swap_workflow_v1.1 \
            minimax_h3_motion_transfer_workflow_native_nodes_v1.0 minimax_h3_motion_transfer_workflow_planner_v1.0; do
     if hf download Alissonerdx/Minimax-H3-ComfyUI workflows/$w.json --revision 64244a4fdf226c8d37b8470d1893b6ba9ab54de1 \
          --local-dir /workspace/.hf_tmp/h3wf >/dev/null \
      && python $WFPY patch /workspace/.hf_tmp/h3wf/workflows $COMFY/user/default/workflows $w.json; then
-      H3WF+=("$COMFY/user/default/workflows/$w.json")
+      CHECKWF+=("$COMFY/user/default/workflows/$w.json")
     else
       echo "FAIL workflow $w"; FAILS=$((FAILS+1))
     fi
   done
+fi
+# ---- qwen21 bfs-head: the BFS Head Swap workflow for Qwen-Image 2.1 (same pinned-revision + patch approach) ----
+if [ "$DONUT_MODEL" = qwen21 ] && [[ " $LORAS " == *" bfs-head "* ]]; then
+  w="Head Swap V1 Qwen 2.1 Workflow.json"
+  if hf download Alissonerdx/BFS-Best-Face-Swap "workflows/$w" --revision 2209ae537ac5e883d6ec7db5b7bd6dccf1a0eba7 \
+       --local-dir /workspace/.hf_tmp/bfswf >/dev/null \
+   && python $WFPY patch /workspace/.hf_tmp/bfswf/workflows $COMFY/user/default/workflows "$w"; then
+    CHECKWF+=("$COMFY/user/default/workflows/$w")
+  else
+    echo "FAIL workflow $w"; FAILS=$((FAILS+1))
+  fi
 fi
 
 # ---- apps (ComfyUI App Mode forms, Apps sidebar): kept in this repo's apps/ folder and fetched from the same
@@ -487,17 +566,23 @@ if [ -s "$WF" ]; then
     [ -n "$(find $M -name "$f" -print -quit)" ] || { echo "FAIL workflow needs missing model $f"; FAILS=$((FAILS+1)); }
   done
 fi
-if [ ${#H3WF[@]} -gt 0 ]; then
-  python $WFPY check $M "${H3WF[@]}" || FAILS=$((FAILS+1))
+if [ ${#CHECKWF[@]} -gt 0 ]; then
+  python $WFPY check $M "${CHECKWF[@]}" || FAILS=$((FAILS+1))
 fi
-# the bundled Qwen Image Edit 2511 Int8 template must find every model it loads
-if [ "$DONUT_MODEL" = h3swap ] || [ "$DONUT_MODEL" = qwenedit ]; then
-  QT=$(python -c 'import importlib.util, os; s = importlib.util.find_spec("comfyui_workflow_templates_json"); print(os.path.join(os.path.dirname(s.origin), "templates", "image_qwen_image_edit_2511_int8.json"))' 2>/dev/null)
-  if [ -s "$QT" ]; then
-    python $WFPY check $M "$QT" "${APPS[@]}" || FAILS=$((FAILS+1))
-  else
-    echo "FAIL template image_qwen_image_edit_2511_int8.json not found"; FAILS=$((FAILS+1))
-  fi
+# the bundled Qwen templates of the model set (and its apps) must find every model they load
+TPL=
+case "$DONUT_MODEL" in
+  h3swap|qwenedit) TPL=image_qwen_image_edit_2511_int8 ;;
+  qwen21) TPL="image_qwen_image_2_1_t2i image_qwen_image_2_1_image_edit image_qwen_image_2_1_turbo_t2i
+    image_qwen_image_2_1_turbo_image_edit image_qwen_image_2_1_background_removal" ;;
+esac
+if [ -n "$TPL" ]; then
+  TD=$(python -c 'import importlib.util, os; s = importlib.util.find_spec("comfyui_workflow_templates_json"); print(os.path.join(os.path.dirname(s.origin), "templates"))' 2>/dev/null)
+  QT=()
+  for t in $TPL; do
+    if [ -s "$TD/$t.json" ]; then QT+=("$TD/$t.json"); else echo "FAIL template $t.json not found"; FAILS=$((FAILS+1)); fi
+  done
+  python $WFPY check $M "${QT[@]}" "${APPS[@]}" || FAILS=$((FAILS+1))
 fi
 
 # ComfyUI is held until provisioning finishes, so it starts with the new nodes/models; no restart needed
