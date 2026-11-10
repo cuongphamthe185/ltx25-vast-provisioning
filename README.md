@@ -13,7 +13,7 @@ Provisioning script for a Vast.ai instance running the `vastai/comfy:v0.42.1` im
 | `h3` | MiniMax H3 text/image-to-video with audio, pruned int8 | ~44 GB (+23 GB with `DONUT_H3_R2V=1`) | Not needed |
 | `h3swap` | MiniMax H3 reference-to-video with the Character Swap and Motion Transfer LoRAs: replace the person in a video with the person in a reference image. Includes `qwenedit` | ~86 GB | Not needed |
 | `qwenedit` | Qwen-Image-Edit 2511 only: up to 3 pictures (person, outfit, setting) + a prompt → a new picture | ~31 GB | Not needed |
-| `qwen21` | Qwen-Image 2.1 text-to-image and editing (up to 10 reference pictures), base and Turbo, plus the Qwen-Image 2.1 LoRAs picked with `DONUT_LORAS`. **Non-commercial license** | ~44 GB + ~2.7 GB LoRAs | Not needed (`CIVITAI_TOKEN` for Civitai LoRAs) |
+| `qwen21` | Qwen-Image 2.1 text-to-image and editing (up to 10 reference pictures), base and Turbo, plus the Qwen-Image 2.1 LoRAs picked with `DONUT_LORAS`. **Non-commercial license** | ~44 GB + ~3.3 GB LoRAs | Not needed (`CIVITAI_TOKEN` for Civitai LoRAs) |
 
 Any model set can also download extra LoRAs, see [Adding LoRAs](#adding-loras).
 
@@ -254,7 +254,7 @@ every template finds the models it loads, and that ComfyUI has the Qwen-Image 2.
 
 #### Qwen-Image 2.1 LoRAs (`DONUT_LORAS`)
 
-Comma-separated keys, `all` or `none`; **default `all`** (~2.7 GB). Picked from the most downloaded Qwen-Image 2.1
+Comma-separated keys, `all` or `none`; **default `all`** (~3.3 GB). Picked from the most downloaded Qwen-Image 2.1
 LoRAs on Civitai and Hugging Face (2026-11-10); the Hugging Face files were checked to be in ComfyUI's LoRA format.
 Load them with a **LoraLoaderModelOnly** after the diffusion model (inside the template's subgraph, or in the
 unpacked graph). Edit LoRAs go in the Image Edit templates, look LoRAs in Text to Image. Civitai keys need
@@ -277,6 +277,9 @@ non-commercial anyway.
 | `outfit-swap` | Person picture + outfit picture → the person wearing the outfit | 0.15 GB | Civitai | No |
 | `consistency` | Keeps the unedited parts of a picture unchanged during edits (2.1 tends to shift colors and detail everywhere) | 0.15 GB | Civitai | No |
 | `breasts-slider` | Body-proportion slider: strength +1…+20 with `large breasts`, −1…−20 with `small breasts` (adult-content creator) | 0.003 GB | Civitai | No (non-commercial, no redistribution) |
+| `nsfw-v2`, `nsfw-v1` | TheseAlpacas NSFW LoRA (adult content, text-to-image and edit). Author's settings: strength 0.8–1, ≥ 25 steps, CFG 3–6, sampler `er_sde`, scheduler `beta` (euler gives bad results). Saved as `NSFW_Qwen_by_TheseAlpacas_V2`, `NSFW_Qwen_Lora_V1` | 0.08 + 0.15 GB | Civitai (civitai.red) | Yes (Civitai permissions) |
+| `viggle-turbo` | Viggle 4-step turbo LoRA (strength 1, ~8 steps), for the base model with other LoRAs | 0.32 GB | Viggle (HF) | Non-commercial (Qwen Research) |
+| `nsfw-compare` | TheseAlpacas' comparison workflow `TheseAlpacas_Qwen21_Comparison_Workflow` (20 prompts × LoRA V1/V2 × with/without turbo). Needs `nsfw-v1`, `nsfw-v2`, `viggle-turbo`; installs rgthree-comfy (Power Lora Loader) and ComfyUI-Simple-Prompt-Batcher. Its LoRA names are set to the files above, and its `easy string` node (ComfyUI-Easy-Use) is replaced with the core multiline string node. Its KSamplers use euler/simple, 15 steps: set `er_sde`/`beta` and more steps for the author's results | 0.3 MB | Civitai (civitai.red) | Yes |
 
 No dedicated relight LoRA exists for Qwen-Image 2.1 yet: the base model relights from the prompt in the Image Edit
 templates (the Turbo Image Edit template's sample prompt is a relight). The Natural-Exposure LoRA was left out
@@ -314,7 +317,7 @@ generate the API key on that account.
 ComfyUI-KJNodes and ComfyUI-VideoHelperSuite for every model set; ComfyUI-LTXVideo for `ltx25` and `ltx23`;
 ComfyUI-BFSNodes when `DONUT_LORAS` includes `motion-transfer` and for `h3swap`; ComfyUI-RMBG and
 Comfyui_Minimax_h3_latent_Upscaler for `h3swap`; ComfyUI-Licon-MSR when `DONUT_LORAS` includes `msr`;
-rgthree-comfy for `qwen21` with `bfs-head`
+rgthree-comfy for `qwen21` with `bfs-head` or `nsfw-compare`; ComfyUI-Simple-Prompt-Batcher for `qwen21` with `nsfw-compare`
 (+ comfyui_controlnet_aux and ComfyUI-Video-Depth-Anything when `DONUT_UNION=1`).
 Each node is pinned to a commit in the script; update the hash there to move to a newer version.
 Their `requirements.txt` are installed with the image's torch/torchvision/torchaudio versions as constraints,

@@ -154,7 +154,7 @@ ltx23_lora() { # key -> "repo file..." (a .json file is a workflow)
 # qwen21 LoRAs selectable with DONUT_LORAS (default all). Qwen-Image 2.1 only: Qwen-Image-Edit 2509/2511 LoRAs
 # do not load on it (other architecture) and the reverse. Civitai keys need CIVITAI_TOKEN.
 QWEN21_LORAS="qma anyangle vertical-angle next-scene cinematic filmstills lenovo nicegirls asian-mix detail-fix
-  bfs-head outfit-swap consistency breasts-slider"
+  bfs-head outfit-swap consistency breasts-slider nsfw-v2 nsfw-v1 viggle-turbo nsfw-compare"
 qwen21_lora() { # key -> "repo file"
   case "$1" in
     # camera angle and next shot (edit an existing picture)
@@ -176,6 +176,12 @@ qwen21_lora() { # key -> "repo file"
     consistency)    echo "civitai:3364470 qwen-image-2.1-consistency.safetensors" ;;
     # body slider (adult-content creator, LoRA strength -20..+20)
     breasts-slider) echo "civitai:3346363 Pornmaster_QI2.1_Breasts_Slider_V1.safetensors" ;;
+    # TheseAlpacas NSFW LoRA (V2, V1) and the Viggle 4-step turbo LoRA, used by the nsfw-compare workflow
+    # (Civitai file names have spaces, so they are saved with underscores; the workflow is patched to match)
+    nsfw-v2)        echo "civitai:3357315 NSFW_Qwen_by_TheseAlpacas_V2.safetensors" ;;
+    nsfw-v1)        echo "civitai:3351951 NSFW_Qwen_Lora_V1.safetensors" ;;
+    viggle-turbo)   echo "Viggle/Qwen-Image-2.1-viggle-turbo Qwen-Image-2.1-viggle-turbo-4step-lora-r64.safetensors" ;;
+    nsfw-compare)   ;;  # workflow only: downloaded and patched with the other workflows below
     *) return 1 ;;
   esac
 }
@@ -397,9 +403,13 @@ fi
 if [ "$DONUT_MODEL" = ltx23 ] && [[ " $LORAS " == *" msr "* ]]; then
   add_node https://github.com/liconstudio/ComfyUI-Licon-MSR.git 94a52bfec735ff6f802c480f7fe8fdac1d279a7f
 fi
-# the BFS head swap workflow (qwen21 bfs-head) shows its result in rgthree's Image Comparer node
-if [ "$DONUT_MODEL" = qwen21 ] && [[ " $LORAS " == *" bfs-head "* ]]; then
+# qwen21 workflows: the BFS head swap shows its result in rgthree's Image Comparer, the NSFW comparison workflow
+# loads its LoRAs with rgthree's Power Lora Loader and fans out its 20 prompts with SimplePromptBatcher
+if [ "$DONUT_MODEL" = qwen21 ] && [[ " $LORAS " == *" bfs-head "* || " $LORAS " == *" nsfw-compare "* ]]; then
   add_node https://github.com/rgthree/rgthree-comfy.git bc48c6aaeca87bedbc14245d89f9bc6be37a630e
+fi
+if [ "$DONUT_MODEL" = qwen21 ] && [[ " $LORAS " == *" nsfw-compare "* ]]; then
+  add_node https://github.com/ai-joe-git/ComfyUI-Simple-Prompt-Batcher.git f7f14462ff06a50cac6c14b668b822f6e2640a54
 fi
 if [ "${DONUT_UNION:-0}" = "1" ]; then
   add_node https://github.com/Fannovel16/comfyui_controlnet_aux.git a587a4c1594524c1d2de5cd1a86cd868ff448e1c
@@ -472,19 +482,30 @@ import json, os, sys
 # the Motion Transfer planner loads the int8 H3 text encoder (25 GB); the nvfp4 one (15.7 GB) is downloaded instead.
 # The BFS Qwen-Image 2.1 head swap workflow names PrunaAI's 8-step LoRA by the author's local file name, and
 # samples with deis_2m from the RES4LYF node pack: use the Comfy-Org file and the core deis sampler.
+# The NSFW comparison workflow (Civitai) names the author's local LoRA files: map them to the files downloaded, and
+# replace its one "easy string" node (ComfyUI-Easy-Use, a large pack) with the core multiline string node.
 RENAME = {"qwen3vl_32b_minimax_h3_int8_convrot.safetensors": "qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors",
-          "p_qwen_image_2.1_8step_v0.1.safetensors": "p_q_image_2.1_8_steps_v0.1_comfyui_bf16.safetensors"}
+          "p_qwen_image_2.1_8step_v0.1.safetensors": "p_q_image_2.1_8_steps_v0.1_comfyui_bf16.safetensors",
+          "NSFW Qwen by TheseAlpacas V2.safetensors": "NSFW_Qwen_by_TheseAlpacas_V2.safetensors",
+          "NSFW Qwen Lora_000002000.safetensors": "NSFW_Qwen_Lora_V1.safetensors",
+          "Qwen-Image-2.1-viggle-turbo-4step-r64-comfyui-T8.safetensors": "Qwen-Image-2.1-viggle-turbo-4step-lora-r64.safetensors"}
 SAMPLER = {"deis_2m": "deis"}
+NODE_TYPE = {"easy string": "PrimitiveStringMultiline"}
 def nodes(w):
     yield from w.get("nodes", [])
     for sg in w.get("definitions", {}).get("subgraphs", []):
         yield from sg.get("nodes", [])
-def model_widgets(n, keys=("widgets_values",)):  # (container, key) of every widget holding a model file name
+def model_widgets(n, keys=("widgets_values",), enabled_only=False):  # (container, key) of every model file name
     out = []
     for k in keys:
         v = n.get(k)
         items = enumerate(v) if isinstance(v, list) else v.items() if isinstance(v, dict) else []
-        out += [(v, i) for i, x in items if isinstance(x, str) and x.endswith(".safetensors")]
+        for i, x in items:
+            if isinstance(x, str) and x.endswith(".safetensors"):
+                out.append((v, i))
+            # rgthree Power Lora Loader rows: {"on": true, "lora": "file", "strength": 1}
+            elif isinstance(x, dict) and isinstance(x.get("lora"), str) and (x.get("on", True) or not enabled_only):
+                out.append((x, "lora"))
     return out
 mode, args = sys.argv[1], sys.argv[2:]
 if mode == "patch":  # src_dir out_dir name...
@@ -497,6 +518,9 @@ if mode == "patch":  # src_dir out_dir name...
             wv = n.get("widgets_values")
             if n.get("type") in ("KSampler", "KSamplerAdvanced") and isinstance(wv, list):
                 n["widgets_values"] = [SAMPLER.get(x, x) if isinstance(x, str) else x for x in wv]
+            if n.get("type") in NODE_TYPE:
+                n["type"] = NODE_TYPE[n["type"]]
+                n.setdefault("properties", {}).update({"Node name for S&R": n["type"], "cnr_id": "comfy-core"})
         json.dump(w, open(os.path.join(args[1], name), "w", encoding="utf-8"))
         print("workflow", name)
 else:  # check models_dir workflow...: every model an enabled node loads must be on disk
@@ -506,7 +530,7 @@ else:  # check models_dir workflow...: every model an enabled node loads must be
         for n in nodes(json.load(open(path, encoding="utf-8"))):
             if n.get("mode", 0) != 0:  # 2 = muted, 4 = bypassed
                 continue
-            for v, i in model_widgets(n):
+            for v, i in model_widgets(n, enabled_only=True):
                 if v[i] not in have:
                     print(f"FAIL {os.path.basename(path)} needs missing model {v[i]}"); bad += 1
     sys.exit(1 if bad else 0)
@@ -530,6 +554,18 @@ if [ "$DONUT_MODEL" = qwen21 ] && [[ " $LORAS " == *" bfs-head "* ]]; then
   if hf download Alissonerdx/BFS-Best-Face-Swap "workflows/$w" --revision 2209ae537ac5e883d6ec7db5b7bd6dccf1a0eba7 \
        --local-dir /workspace/.hf_tmp/bfswf >/dev/null \
    && python $WFPY patch /workspace/.hf_tmp/bfswf/workflows $COMFY/user/default/workflows "$w"; then
+    CHECKWF+=("$COMFY/user/default/workflows/$w")
+  else
+    echo "FAIL workflow $w"; FAILS=$((FAILS+1))
+  fi
+fi
+# ---- qwen21 nsfw-compare: TheseAlpacas' Qwen 2.1 comparison workflow (Civitai 3361461, needs CIVITAI_TOKEN):
+# 20 prompts x NSFW LoRA V1 / V2, with and without the Viggle turbo LoRA (keys nsfw-v1, nsfw-v2, viggle-turbo) ----
+if [ "$DONUT_MODEL" = qwen21 ] && [[ " $LORAS " == *" nsfw-compare "* ]]; then
+  w=TheseAlpacas_Qwen21_Comparison_Workflow.json
+  mkdir -p /workspace/.hf_tmp/nsfwwf
+  if civ 3361461 $w /workspace/.hf_tmp/nsfwwf \
+   && python $WFPY patch /workspace/.hf_tmp/nsfwwf $COMFY/user/default/workflows $w; then
     CHECKWF+=("$COMFY/user/default/workflows/$w")
   else
     echo "FAIL workflow $w"; FAILS=$((FAILS+1))
